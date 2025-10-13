@@ -1,0 +1,252 @@
+{
+  "api_specification": {
+    "base_url": "http://127.0.0.1:3001",
+    "endpoint": "/query_logs",
+    "method": "POST",
+    "content_type": "application/json",
+    "description": "Query logs by metric name and time range. Returns log groups with representative samples and relative change from baseline period."
+  },
+
+  "request_format": {
+    "description": "Send a POST request with the following JSON body",
+    "schema": {
+      "metric_name": {
+        "type": "string",
+        "required": true,
+        "description": "The name of the metric to filter logs (e.g., 'cpu_usage', 'memory_usage', 'disk_io')"
+      },
+      "start_time": {
+        "type": "string",
+        "format": "ISO 8601 datetime",
+        "required": true,
+        "description": "Start of the time range in UTC (e.g., '2025-01-15T10:00:00Z')"
+      },
+      "end_time": {
+        "type": "string",
+        "format": "ISO 8601 datetime",
+        "required": true,
+        "description": "End of the time range in UTC (e.g., '2025-01-15T10:30:00Z')"
+      }
+    }
+  },
+
+  "request_examples": [
+    {
+      "description": "Query CPU usage logs for 30 minutes",
+      "request": {
+        "metric_name": "cpu_usage",
+        "start_time": "2025-01-15T10:00:00Z",
+        "end_time": "2025-01-15T10:30:00Z"
+      }
+    },
+    {
+      "description": "Query memory usage logs for 1 hour",
+      "request": {
+        "metric_name": "memory_usage",
+        "start_time": "2025-01-15T14:00:00Z",
+        "end_time": "2025-01-15T15:00:00Z"
+      }
+    },
+    {
+      "description": "Query disk I/O logs for 2 hours",
+      "request": {
+        "metric_name": "disk_io",
+        "start_time": "2025-01-15T08:00:00Z",
+        "end_time": "2025-01-15T10:00:00Z"
+      }
+    }
+  ],
+
+  "response_format": {
+    "description": "The API returns a JSON object with log groups sorted by contribution to anomaly score",
+    "schema": {
+      "log_groups": {
+        "type": "array",
+        "description": "Array of log groups, sorted by contribution to JSD score (highest first)",
+        "items": {
+          "representative_logs": {
+            "type": "array of strings",
+            "description": "Up to 3 sample log lines from this group"
+          },
+          "relative_change": {
+            "type": "number",
+            "description": "Percentage change from baseline period. Positive = increased frequency, Negative = decreased frequency"
+          }
+        }
+      }
+    }
+  },
+
+  "response_examples": [
+    {
+      "description": "Successful response with 3 log groups",
+      "status": 200,
+      "response": {
+        "log_groups": [
+          {
+            "representative_logs": [
+              "disk_io: 250MB/s - Disk activity moderate",
+              "disk_io: 250MB/s - Disk activity moderate"
+            ],
+            "relative_change": 100.0
+          },
+          {
+            "representative_logs": [
+              "memory_usage: 2.5GB - Memory consumption stable",
+              "memory_usage: 2.5GB - Memory consumption stable"
+            ],
+            "relative_change": 100.0
+          },
+          {
+            "representative_logs": [
+              "cpu_usage: 45.2% - Server load normal",
+              "cpu_usage: 67.8% - Server load increased",
+              "cpu_usage: 89.3% - High server load detected"
+            ],
+            "relative_change": -28.571428571428573
+          }
+        ]
+      }
+    }
+  ],
+
+  "error_responses": [
+    {
+      "description": "Invalid time range (start_time >= end_time)",
+      "status": 400,
+      "response": {
+        "error": "start_time must be before end_time"
+      }
+    },
+    {
+      "description": "Insufficient data for analysis",
+      "status": 400,
+      "response": {
+        "error": "Insufficient data for JSD calculation"
+      }
+    },
+    {
+      "description": "Failed to query metadata service",
+      "status": 500,
+      "response": {
+        "error": "Failed to query metadata service: [error details]"
+      }
+    }
+  ],
+
+  "curl_examples": [
+    {
+      "description": "Basic query for CPU usage",
+      "command": "curl -X POST http://127.0.0.1:3001/query_logs \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"metric_name\": \"cpu_usage\",\n    \"start_time\": \"2025-01-15T10:00:00Z\",\n    \"end_time\": \"2025-01-15T10:30:00Z\"\n  }'"
+    },
+    {
+      "description": "Query with pretty-printed output",
+      "command": "curl -X POST http://127.0.0.1:3001/query_logs \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"metric_name\": \"memory_usage\",\n    \"start_time\": \"2025-01-15T14:00:00Z\",\n    \"end_time\": \"2025-01-15T15:00:00Z\"\n  }' | jq ."
+    }
+  ],
+
+  "interpretation_guide": {
+    "relative_change": {
+      "description": "How to interpret the relative_change field",
+      "examples": [
+        {
+          "value": 100.0,
+          "meaning": "This log pattern increased by 100% (doubled) compared to baseline. New or significantly increased occurrence."
+        },
+        {
+          "value": 50.0,
+          "meaning": "This log pattern increased by 50% compared to baseline. Moderate increase in frequency."
+        },
+        {
+          "value": 0.0,
+          "meaning": "No change in frequency compared to baseline period."
+        },
+        {
+          "value": -28.57,
+          "meaning": "This log pattern decreased by 28.57% compared to baseline. Less frequent than normal."
+        },
+        {
+          "value": -100.0,
+          "meaning": "This log pattern disappeared completely (was present in baseline but not in current period)."
+        }
+      ]
+    },
+    "log_groups_ordering": {
+      "description": "Log groups are ordered by their contribution to the anomaly score",
+      "note": "Groups at the top of the array are the most significant changes from normal behavior"
+    }
+  },
+
+  "grafana_integration": {
+    "datasource_config": {
+      "type": "JSON API / SimpleJson",
+      "url": "http://127.0.0.1:3001",
+      "method": "POST",
+      "path": "/query_logs"
+    },
+    "panel_configuration": {
+      "query_example": {
+        "metric_name": "${metric}",
+        "start_time": "${__from:date:iso}",
+        "end_time": "${__to:date:iso}"
+      },
+      "notes": [
+        "Use Grafana variables for metric_name selection",
+        "Use built-in time range variables (__from and __to) for dynamic time ranges",
+        "Consider displaying relative_change as color-coded indicators (red for increases, green for decreases)"
+      ]
+    }
+  },
+
+  "frontend_implementation_notes": {
+    "display_recommendations": [
+      {
+        "field": "representative_logs",
+        "recommendation": "Display as expandable log entries or code blocks with monospace font"
+      },
+      {
+        "field": "relative_change",
+        "recommendation": "Use visual indicators: red for positive changes (anomalies), green/gray for negative (reduced errors), with percentage badges"
+      },
+      {
+        "field": "log_groups ordering",
+        "recommendation": "Display groups in order received (already sorted by importance). First group = most significant change"
+      }
+    ],
+    "color_coding_suggestion": {
+      "positive_change_high": {
+        "range": "> 50%",
+        "color": "#DC2626",
+        "meaning": "Critical increase - new or significantly elevated log patterns"
+      },
+      "positive_change_medium": {
+        "range": "10% to 50%",
+        "color": "#F59E0B",
+        "meaning": "Warning - moderate increase in log patterns"
+      },
+      "neutral": {
+        "range": "-10% to 10%",
+        "color": "#6B7280",
+        "meaning": "Normal - minimal change from baseline"
+      },
+      "negative_change": {
+        "range": "< -10%",
+        "color": "#10B981",
+        "meaning": "Improvement - reduced error/warning patterns"
+      }
+    },
+    "timezone_handling": {
+      "note": "All timestamps are in UTC. Convert to user's local timezone in the UI if needed.",
+      "example": "Use JavaScript: new Date('2025-01-15T10:00:00Z').toLocaleString()"
+    }
+  },
+
+  "available_metrics": {
+    "note": "Current mock implementation includes these sample metrics",
+    "metrics": [
+      "cpu_usage",
+      "memory_usage",
+      "disk_io"
+    ]
+  }
+}

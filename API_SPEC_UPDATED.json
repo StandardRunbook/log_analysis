@@ -1,0 +1,344 @@
+{
+  "api_specification": {
+    "base_url": "http://127.0.0.1:3001",
+    "endpoint": "/query_logs",
+    "method": "POST",
+    "content_type": "application/json",
+    "cors_enabled": true,
+    "description": "Query logs by metric name, graph name, and time range. Returns log groups with representative samples and relative change from baseline period (3 hours prior)."
+  },
+
+  "request_format": {
+    "description": "Send a POST request with the following JSON body",
+    "required_fields": {
+      "metric_name": {
+        "type": "string",
+        "required": true,
+        "description": "The name of the metric to filter logs",
+        "examples": ["cpu_usage", "memory_usage", "disk_io", "Unknown Series"]
+      },
+      "graph_name": {
+        "type": "string",
+        "required": true,
+        "description": "The name of the graph or panel",
+        "examples": ["CPU Performance", "Memory Monitor", "System Overview"]
+      },
+      "start_time": {
+        "type": "string",
+        "format": "ISO 8601 datetime (UTC)",
+        "required": true,
+        "description": "Start of the time range",
+        "examples": ["2025-01-15T10:00:00Z", "2025-10-13T04:15:45.273Z"]
+      },
+      "end_time": {
+        "type": "string",
+        "format": "ISO 8601 datetime (UTC)",
+        "required": true,
+        "description": "End of the time range",
+        "examples": ["2025-01-15T10:30:00Z", "2025-10-13T05:15:45.273Z"]
+      }
+    }
+  },
+
+  "request_examples": [
+    {
+      "description": "Query CPU usage logs for 30 minutes",
+      "request": {
+        "metric_name": "cpu_usage",
+        "graph_name": "CPU Performance Dashboard",
+        "start_time": "2025-01-15T10:00:00Z",
+        "end_time": "2025-01-15T10:30:00Z"
+      }
+    },
+    {
+      "description": "Query memory usage logs for 1 hour",
+      "request": {
+        "metric_name": "memory_usage",
+        "graph_name": "Memory Monitor",
+        "start_time": "2025-01-15T14:00:00Z",
+        "end_time": "2025-01-15T15:00:00Z"
+      }
+    },
+    {
+      "description": "Query with unknown metric (will return sample data)",
+      "request": {
+        "metric_name": "Unknown Series",
+        "graph_name": "System Overview",
+        "start_time": "2025-10-13T04:15:45.273Z",
+        "end_time": "2025-10-13T05:15:45.273Z"
+      }
+    }
+  ],
+
+  "response_format": {
+    "description": "The API returns a JSON object with log groups sorted by contribution to anomaly score (highest first)",
+    "success_status": 200,
+    "schema": {
+      "log_groups": {
+        "type": "array",
+        "description": "Array of log groups, sorted by JSD contribution (most significant changes first)",
+        "items": {
+          "type": "object",
+          "properties": {
+            "representative_logs": {
+              "type": "array of strings",
+              "description": "1-3 sample log lines from this group",
+              "example": ["cpu_usage: 45.2% - Server load normal", "cpu_usage: 67.8% - Server load increased"]
+            },
+            "relative_change": {
+              "type": "number",
+              "description": "Percentage change from baseline period. Positive = increased frequency, Negative = decreased frequency",
+              "range": "-100 to +∞",
+              "example": 100.0
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "response_examples": [
+    {
+      "description": "Successful response with 3 log groups showing different change patterns",
+      "status": 200,
+      "response": {
+        "log_groups": [
+          {
+            "representative_logs": [
+              "disk_io: 250MB/s - Disk activity moderate",
+              "disk_io: 250MB/s - Disk activity moderate"
+            ],
+            "relative_change": 100.0
+          },
+          {
+            "representative_logs": [
+              "memory_usage: 2.5GB - Memory consumption stable",
+              "memory_usage: 2.5GB - Memory consumption stable"
+            ],
+            "relative_change": 100.0
+          },
+          {
+            "representative_logs": [
+              "cpu_usage: 45.2% - Server load normal",
+              "cpu_usage: 67.8% - Server load increased",
+              "cpu_usage: 89.3% - High server load detected"
+            ],
+            "relative_change": -28.571428571428573
+          }
+        ]
+      }
+    }
+  ],
+
+  "error_responses": [
+    {
+      "description": "Invalid time range (start_time >= end_time)",
+      "status": 400,
+      "response": {
+        "error": "start_time must be before end_time"
+      }
+    },
+    {
+      "description": "Insufficient data for JSD analysis (no logs found)",
+      "status": 400,
+      "response": {
+        "error": "Insufficient data for JSD calculation"
+      }
+    },
+    {
+      "description": "Invalid JSON request body",
+      "status": 400,
+      "response": {
+        "error": "Invalid JSON request body: missing field `metric_name`"
+      }
+    },
+    {
+      "description": "Failed to query metadata service (internal error)",
+      "status": 500,
+      "response": {
+        "error": "Failed to query metadata service: [error details]"
+      }
+    }
+  ],
+
+  "typescript_interface": {
+    "description": "TypeScript interfaces for type-safe integration",
+    "code": "// Request interface\ninterface LogQueryRequest {\n  metric_name: string;\n  graph_name: string;\n  start_time: string;  // ISO 8601 format\n  end_time: string;    // ISO 8601 format\n}\n\n// Response interface\ninterface LogQueryResponse {\n  log_groups: LogGroup[];\n}\n\ninterface LogGroup {\n  representative_logs: string[];\n  relative_change: number;\n}\n\n// Error response interface\ninterface ErrorResponse {\n  error: string;\n}"
+  },
+
+  "curl_examples": [
+    {
+      "description": "Basic query with both metric_name and graph_name",
+      "command": "curl -X POST http://127.0.0.1:3001/query_logs \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"metric_name\": \"cpu_usage\",\n    \"graph_name\": \"CPU Performance\",\n    \"start_time\": \"2025-01-15T10:00:00Z\",\n    \"end_time\": \"2025-01-15T10:30:00Z\"\n  }'"
+    },
+    {
+      "description": "Query with pretty-printed JSON output",
+      "command": "curl -X POST http://127.0.0.1:3001/query_logs \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"metric_name\": \"memory_usage\",\n    \"graph_name\": \"Memory Monitor\",\n    \"start_time\": \"2025-01-15T14:00:00Z\",\n    \"end_time\": \"2025-01-15T15:00:00Z\"\n  }' | jq ."
+    },
+    {
+      "description": "Query with CORS headers (from browser/Grafana)",
+      "command": "curl -X POST http://127.0.0.1:3001/query_logs \\\n  -H \"Content-Type: application/json\" \\\n  -H \"Origin: http://localhost:3000\" \\\n  -d '{\n    \"metric_name\": \"disk_io\",\n    \"graph_name\": \"Disk Performance\",\n    \"start_time\": \"2025-01-15T08:00:00Z\",\n    \"end_time\": \"2025-01-15T10:00:00Z\"\n  }'"
+    }
+  ],
+
+  "javascript_fetch_example": {
+    "description": "Example using JavaScript fetch API",
+    "code": "async function queryLogs(metricName, graphName, startTime, endTime) {\n  try {\n    const response = await fetch('http://127.0.0.1:3001/query_logs', {\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n      },\n      body: JSON.stringify({\n        metric_name: metricName,\n        graph_name: graphName,\n        start_time: startTime,\n        end_time: endTime,\n      }),\n    });\n\n    if (!response.ok) {\n      const error = await response.json();\n      throw new Error(error.error || 'Request failed');\n    }\n\n    const data = await response.json();\n    return data;\n  } catch (error) {\n    console.error('Failed to query logs:', error);\n    throw error;\n  }\n}\n\n// Usage example\nqueryLogs(\n  'cpu_usage',\n  'CPU Performance Dashboard',\n  '2025-01-15T10:00:00Z',\n  '2025-01-15T10:30:00Z'\n)\n  .then(data => {\n    console.log('Log groups:', data.log_groups);\n    data.log_groups.forEach((group, index) => {\n      console.log(`Group ${index + 1}:`);\n      console.log(`  Change: ${group.relative_change}%`);\n      console.log(`  Sample logs:`, group.representative_logs);\n    });\n  })\n  .catch(error => console.error('Error:', error));"
+  },
+
+  "axios_example": {
+    "description": "Example using axios library",
+    "code": "import axios from 'axios';\n\nconst queryLogs = async (metricName, graphName, startTime, endTime) => {\n  try {\n    const response = await axios.post('http://127.0.0.1:3001/query_logs', {\n      metric_name: metricName,\n      graph_name: graphName,\n      start_time: startTime,\n      end_time: endTime,\n    });\n    \n    return response.data;\n  } catch (error) {\n    if (error.response) {\n      // Server responded with error\n      console.error('Server error:', error.response.data.error);\n      throw new Error(error.response.data.error);\n    } else {\n      // Network error\n      console.error('Network error:', error.message);\n      throw error;\n    }\n  }\n};"
+  },
+
+  "interpretation_guide": {
+    "relative_change": {
+      "description": "How to interpret the relative_change field",
+      "examples": [
+        {
+          "value": 100.0,
+          "meaning": "Doubled (100% increase)",
+          "interpretation": "This log pattern appeared twice as often, or is completely new",
+          "ui_color": "#DC2626",
+          "ui_label": "Critical ↑100%"
+        },
+        {
+          "value": 50.0,
+          "meaning": "50% increase",
+          "interpretation": "Moderate increase in log frequency",
+          "ui_color": "#F59E0B",
+          "ui_label": "Warning ↑50%"
+        },
+        {
+          "value": 5.0,
+          "meaning": "5% increase",
+          "interpretation": "Minor increase, likely normal variation",
+          "ui_color": "#6B7280",
+          "ui_label": "Neutral ↑5%"
+        },
+        {
+          "value": 0.0,
+          "meaning": "No change",
+          "interpretation": "Same frequency as baseline period",
+          "ui_color": "#6B7280",
+          "ui_label": "Unchanged 0%"
+        },
+        {
+          "value": -28.57,
+          "meaning": "28.57% decrease",
+          "interpretation": "Log pattern appears less frequently than baseline",
+          "ui_color": "#10B981",
+          "ui_label": "Improved ↓29%"
+        },
+        {
+          "value": -100.0,
+          "meaning": "Disappeared completely",
+          "interpretation": "Pattern was in baseline but not in current period",
+          "ui_color": "#3B82F6",
+          "ui_label": "Resolved ↓100%"
+        }
+      ]
+    },
+    "log_groups_ordering": {
+      "description": "Log groups are pre-sorted by contribution to anomaly score",
+      "note": "First group = most significant change. Display in order received.",
+      "recommendation": "Show top 3-5 groups for quick insights, allow expanding to see all"
+    },
+    "baseline_period": {
+      "description": "The API automatically queries a 3-hour baseline period before start_time",
+      "example": "If start_time is 10:00, baseline is 07:00-10:00",
+      "note": "No need to specify baseline in the request"
+    }
+  },
+
+  "ui_implementation_guide": {
+    "color_coding": {
+      "high_increase": {
+        "threshold": "> 50%",
+        "color": "#DC2626",
+        "background": "#FEE2E2",
+        "label": "Critical Increase"
+      },
+      "medium_increase": {
+        "threshold": "10% to 50%",
+        "color": "#F59E0B",
+        "background": "#FEF3C7",
+        "label": "Warning"
+      },
+      "neutral": {
+        "threshold": "-10% to 10%",
+        "color": "#6B7280",
+        "background": "#F3F4F6",
+        "label": "Normal"
+      },
+      "improvement": {
+        "threshold": "< -10%",
+        "color": "#10B981",
+        "background": "#D1FAE5",
+        "label": "Improvement"
+      }
+    },
+    "display_recommendations": {
+      "log_lines": "Use monospace font (Courier, Monaco) for log text",
+      "badges": "Display relative_change as prominent badge with color coding",
+      "cards": "Use card/panel layout for each log group",
+      "expandable": "Make log groups expandable to save space",
+      "empty_state": "Show friendly message if no log groups returned"
+    }
+  },
+
+  "cors_configuration": {
+    "enabled": true,
+    "allow_origin": "*",
+    "allow_methods": "*",
+    "allow_headers": "*",
+    "notes": [
+      "CORS is fully enabled - no proxy needed",
+      "Works with Grafana on different port/domain",
+      "Safe for browser-based requests"
+    ]
+  },
+
+  "available_metrics_mock": {
+    "note": "Current mock implementation recognizes these metrics",
+    "known_metrics": [
+      "cpu_usage",
+      "memory_usage",
+      "disk_io"
+    ],
+    "unknown_metric_behavior": "Returns sample data with warning log. In production, would query actual metric."
+  },
+
+  "common_issues": {
+    "issues": [
+      {
+        "problem": "400 Bad Request: 'start_time must be before end_time'",
+        "solution": "Ensure start_time < end_time in your request"
+      },
+      {
+        "problem": "400 Bad Request: 'Insufficient data for JSD calculation'",
+        "solution": "No logs found for the metric/time range. Try different metric or time range."
+      },
+      {
+        "problem": "422 Unprocessable Entity",
+        "solution": "JSON parsing error. Ensure all required fields are present and properly formatted."
+      },
+      {
+        "problem": "CORS error in browser",
+        "solution": "Should not happen - CORS is enabled. Check server is running on port 3001."
+      }
+    ]
+  },
+
+  "production_notes": {
+    "description": "Notes for deploying to production",
+    "items": [
+      "Replace mock metadata service with real API integration",
+      "Replace mock log stream client with CloudWatch/Splunk/Elasticsearch",
+      "Add authentication (Bearer token recommended)",
+      "Configure proper logging and monitoring",
+      "Consider rate limiting for API protection",
+      "Add metrics collection for API performance"
+    ]
+  }
+}
