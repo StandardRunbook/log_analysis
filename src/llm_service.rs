@@ -27,15 +27,22 @@ pub struct TemplateGenerationResponse {
 }
 
 pub struct LLMServiceClient {
-    base_url: String,
-    client: reqwest::Client,
+    provider: String,
+    api_key: String,
+    model: String,
 }
 
 impl LLMServiceClient {
-    pub fn new(base_url: String) -> Self {
+    pub fn new(provider: String, api_key: String, model: String) -> Self {
+        tracing::info!(
+            "🤖 LLM Service configured with provider: {}, model: {}",
+            provider,
+            model
+        );
         Self {
-            base_url,
-            client: reqwest::Client::new(),
+            provider,
+            api_key,
+            model,
         }
     }
 
@@ -328,20 +335,42 @@ VALIDATION:
         (pattern, variables)
     }
 
-    // Uncomment this for actual LLM API integration
+    // Uncomment this for actual LLM API integration using Rig
     /*
     async fn call_llm_api(&self, request: &TemplateGenerationRequest) -> Result<LogTemplate> {
-        let url = format!("{}/api/generate-template", self.base_url);
+        use rig_core::{completion::Prompt, providers};
 
-        let response = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?
-            .error_for_status()?;
+        // Create the appropriate client based on provider
+        let client = match self.provider.as_str() {
+            "openai" => {
+                providers::openai::Client::new(&self.api_key)
+                    .completion_model(&self.model)
+            }
+            "anthropic" => {
+                providers::anthropic::Client::new(&self.api_key)
+                    .completion_model(&self.model)
+            }
+            _ => return Err(anyhow::anyhow!("Unsupported LLM provider: {}", self.provider)),
+        };
 
-        let llm_response: TemplateGenerationResponse = response.json().await?;
-        Ok(llm_response.template)
+        // Build the prompt with instructions
+        let prompt = format!(
+            "{}\n\nLog line to analyze:\n{}\n\nProvide the template in JSON format with fields: template_id, pattern, variable_names.",
+            request.instructions,
+            request.log_line
+        );
+
+        // Call the LLM
+        let response = client.prompt(&prompt).await?;
+
+        // Parse the response (this is simplified - you'd want better JSON extraction)
+        // For now, return a mock response
+        // TODO: Parse the actual LLM response and extract the template
+        Ok(LogTemplate {
+            template_id: 1,
+            pattern: "placeholder".to_string(),
+            variable_names: vec![],
+        })
     }
     */
 }

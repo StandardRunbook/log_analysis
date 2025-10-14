@@ -17,3 +17,13 @@ reqwest = { version = "0.12", features = ["json"] }
 radix_trie = "0.2"
 regex = "1.10"
 anyhow = "1.0"
+
+# ClickHouse client
+clickhouse = "0.12"
+
+# Rig for LLM communication
+rig-core = "0.3"
+
+# gRPC client
+tonic = "0.12"
+prost = "0.13"

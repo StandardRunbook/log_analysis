@@ -56,59 +56,47 @@ impl LogStreamClient {
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
     ) -> Vec<LogEntry> {
-        let sample_logs = vec![
-            (
-                "2025-01-15T10:00:00Z",
-                "cpu_usage: 45.2% - Server load normal",
-            ),
-            (
-                "2025-01-15T10:05:00Z",
-                "cpu_usage: 67.8% - Server load increased",
-            ),
-            (
-                "2025-01-15T10:10:00Z",
-                "cpu_usage: 89.3% - High server load detected",
-            ),
-            (
-                "2025-01-15T10:15:00Z",
-                "memory_usage: 2.5GB - Memory consumption stable",
-            ),
-            (
-                "2025-01-15T10:20:00Z",
-                "cpu_usage: 55.1% - Server load returning to normal",
-            ),
-            (
-                "2025-01-15T10:25:00Z",
-                "disk_io: 250MB/s - Disk activity moderate",
-            ),
-            (
-                "2025-01-15T10:30:00Z",
-                "cpu_usage: 42.7% - Server load normal",
-            ),
-            (
-                "2025-01-15T10:35:00Z",
-                "unknown_metric: 123 - This is a new log format",
-            ),
+        use chrono::Duration;
+
+        tracing::info!(
+            "🎭 Generating mock logs for stream {} between {} and {}",
+            stream_id,
+            start_time,
+            end_time
+        );
+
+        // Generate logs dynamically based on the requested time range
+        let mut logs = Vec::new();
+        let interval = Duration::minutes(5);
+        let mut current_time = start_time;
+
+        let sample_content = vec![
+            "cpu_usage: 45.2% - Server load normal",
+            "cpu_usage: 67.8% - Server load increased",
+            "cpu_usage: 89.3% - High server load detected",
+            "memory_usage: 2.5GB - Memory consumption stable",
+            "cpu_usage: 55.1% - Server load returning to normal",
+            "disk_io: 250MB/s - Disk activity moderate",
+            "cpu_usage: 42.7% - Server load normal",
+            "memory_usage: 2.5GB - Memory consumption stable",
+            "disk_io: 250MB/s - Disk activity moderate",
+            "cpu_usage: 72.1% - Server load elevated",
         ];
 
-        sample_logs
-            .into_iter()
-            .filter_map(|(timestamp_str, content)| {
-                let log_time = DateTime::parse_from_rfc3339(timestamp_str)
-                    .ok()?
-                    .with_timezone(&Utc);
+        let mut index = 0;
+        while current_time <= end_time {
+            logs.push(LogEntry {
+                timestamp: current_time,
+                content: sample_content[index % sample_content.len()].to_string(),
+                stream_id: stream_id.to_string(),
+            });
 
-                if log_time >= start_time && log_time <= end_time {
-                    Some(LogEntry {
-                        timestamp: log_time,
-                        content: content.to_string(),
-                        stream_id: stream_id.to_string(),
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect()
+            current_time = current_time + interval;
+            index += 1;
+        }
+
+        tracing::info!("✅ Generated {} mock logs", logs.len());
+        logs
     }
 
     // Uncomment for actual API integration

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 pub struct MetadataQuery {
-    pub org: String,
+    pub org_id: String,
     pub dashboard: String,
     pub graph_name: String,
     pub metric_name: String,
@@ -25,25 +25,23 @@ pub struct MetadataResponse {
 }
 
 pub struct MetadataServiceClient {
-    base_url: String,
-    client: reqwest::Client,
+    grpc_endpoint: String,
 }
 
 impl MetadataServiceClient {
-    pub fn new(base_url: String) -> Self {
-        Self {
-            base_url,
-            client: reqwest::Client::new(),
-        }
+    pub fn new(grpc_endpoint: String) -> Self {
+        tracing::info!(
+            "🔌 Metadata Service configured with gRPC endpoint: {}",
+            grpc_endpoint
+        );
+        Self { grpc_endpoint }
     }
 
     /// Query the metadata service to get relevant log streams for a metric
     pub async fn get_log_streams(&self, query: &MetadataQuery) -> Result<Vec<LogStream>> {
-        let _url = format!("{}/api/log-streams", self.base_url);
-
         tracing::info!(
-            "Querying metadata service for org: {}, dashboard: {}, graph: {}, metric: {} in time range {} to {}",
-            query.org,
+            "Querying metadata service for org_id: {}, dashboard: {}, graph: {}, metric: {} in time range {} to {}",
+            query.org_id,
             query.dashboard,
             query.graph_name,
             query.metric_name,
@@ -54,7 +52,7 @@ impl MetadataServiceClient {
         // In production, this would make a real HTTP call
         // For now, return mock data based on metric name
         Ok(self.mock_metadata_response(
-            &query.org,
+            &query.org_id,
             &query.dashboard,
             &query.graph_name,
             &query.metric_name,
@@ -64,14 +62,14 @@ impl MetadataServiceClient {
     /// Mock implementation - replace with actual API call in production
     fn mock_metadata_response(
         &self,
-        org: &str,
+        org_id: &str,
         dashboard: &str,
         graph_name: &str,
         metric_name: &str,
     ) -> Vec<LogStream> {
         tracing::info!(
-            "Mock metadata lookup: org='{}', dashboard='{}', graph='{}', metric='{}'",
-            org,
+            "Mock metadata lookup: org_id='{}', dashboard='{}', graph='{}', metric='{}'",
+            org_id,
             dashboard,
             graph_name,
             metric_name
@@ -80,23 +78,23 @@ impl MetadataServiceClient {
         match metric_name {
             "cpu_usage" => vec![
                 LogStream {
-                    stream_id: format!("{}/{}/stream-001", org, dashboard),
+                    stream_id: format!("{}/{}/stream-001", org_id, dashboard),
                     stream_name: "system-metrics-primary".to_string(),
                     source: "server-01".to_string(),
                 },
                 LogStream {
-                    stream_id: format!("{}/{}/stream-002", org, dashboard),
+                    stream_id: format!("{}/{}/stream-002", org_id, dashboard),
                     stream_name: "system-metrics-secondary".to_string(),
                     source: "server-02".to_string(),
                 },
             ],
             "memory_usage" => vec![LogStream {
-                stream_id: format!("{}/{}/stream-003", org, dashboard),
+                stream_id: format!("{}/{}/stream-003", org_id, dashboard),
                 stream_name: "memory-monitor".to_string(),
                 source: "monitoring-service".to_string(),
             }],
             "disk_io" => vec![LogStream {
-                stream_id: format!("{}/{}/stream-004", org, dashboard),
+                stream_id: format!("{}/{}/stream-004", org_id, dashboard),
                 stream_name: "disk-performance".to_string(),
                 source: "storage-monitor".to_string(),
             }],
@@ -108,12 +106,12 @@ impl MetadataServiceClient {
                 );
                 vec![
                     LogStream {
-                        stream_id: format!("{}/{}/stream-default-001", org, dashboard),
+                        stream_id: format!("{}/{}/stream-default-001", org_id, dashboard),
                         stream_name: "system-metrics-primary".to_string(),
                         source: "server-01".to_string(),
                     },
                     LogStream {
-                        stream_id: format!("{}/{}/stream-default-002", org, dashboard),
+                        stream_id: format!("{}/{}/stream-default-002", org_id, dashboard),
                         stream_name: "system-metrics-secondary".to_string(),
                         source: "server-02".to_string(),
                     },

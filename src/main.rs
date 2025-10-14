@@ -1,3 +1,4 @@
+mod config;
 mod histogram;
 mod jsd;
 mod llm_service;
@@ -22,6 +23,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use tracing_subscriber;
 
+use config::Config;
 use histogram::Histogram;
 use jsd::{calculate_jsd, get_top_contributors};
 use llm_service::LLMServiceClient;
@@ -32,7 +34,7 @@ use metadata_service::{MetadataQuery, MetadataServiceClient};
 #[derive(Debug, Deserialize)]
 struct LogQueryRequest {
     // Grafana context (all required)
-    org: String,
+    org_id: String,
     dashboard: String,
     panel_title: String,
     metric_name: String,
@@ -121,11 +123,41 @@ async fn main() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Initialize services
-    let metadata_client = MetadataServiceClient::new("http://metadata-service:8080".to_string());
+    // Load configuration from environment variables
+    let config = match Config::from_env() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::error!("❌ Configuration error: {}", e);
+            tracing::error!("💡 Please set the required environment variables:");
+            tracing::error!(
+                "   - METADATA_GRPC_ENDPOINT: gRPC endpoint for metadata service (e.g., http://localhost:50051)"
+            );
+            tracing::error!(
+                "   - CLICKHOUSE_URL: ClickHouse server URL (e.g., http://localhost:8123)"
+            );
+            tracing::error!("   - CLICKHOUSE_USER: ClickHouse username");
+            tracing::error!("   - CLICKHOUSE_PASSWORD: ClickHouse password");
+            tracing::error!(
+                "   - CLICKHOUSE_DATABASE: ClickHouse database (optional, default: default)"
+            );
+            tracing::error!("   - LLM_PROVIDER: LLM provider (openai, anthropic, cohere)");
+            tracing::error!("   - LLM_API_KEY: API key for LLM service");
+            tracing::error!("   - LLM_MODEL: Model name (optional, auto-detected from provider)");
+            std::process::exit(1);
+        }
+    };
+
+    config.log_config();
+
+    // Initialize services with configuration
+    let metadata_client = MetadataServiceClient::new(config.metadata_grpc_endpoint.clone());
     let log_stream_client = LogStreamClient::new();
     let log_matcher = Arc::new(tokio::sync::RwLock::new(LogMatcher::new()));
-    let llm_client = LLMServiceClient::new("http://llm-service:8081".to_string());
+    let llm_client = LLMServiceClient::new(
+        config.llm_provider.clone(),
+        config.llm_api_key.clone(),
+        config.llm_model.clone(),
+    );
 
     let app_state = Arc::new(AppState {
         metadata_client,
@@ -147,7 +179,7 @@ async fn main() {
         .layer(cors)
         .layer(middleware::from_fn(log_request_middleware));
 
-    // Define the address to bind to
+    // Define the address to bind to (hardcoded for REST API)
     let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
     info!("🚀 Log Analyzer API starting on {}", addr);
     info!("📡 Waiting for requests from Grafana plugin...");
@@ -174,7 +206,7 @@ async fn query_logs_handler(
 
     info!("═══════════════════════════════════════════════════════");
     info!("📊 Grafana Query Context:");
-    info!("   Org: {}", payload.org);
+    info!("   Org ID: {}", payload.org_id);
     info!("   Dashboard: {}", payload.dashboard);
     info!("   Panel: {}", payload.panel_title);
     info!("   Metric: {}", payload.metric_name);
@@ -201,7 +233,7 @@ async fn query_logs_handler(
     // Query baseline logs (3 hours prior)
     let baseline_histogram = query_and_build_histogram(
         &state,
-        &payload.org,
+        &payload.org_id,
         &payload.dashboard,
         &payload.panel_title,
         &payload.metric_name,
@@ -220,7 +252,7 @@ async fn query_logs_handler(
     let (current_histogram, processed_logs, _matched_count, _unmatched_count, _new_templates_count) =
         query_and_process_logs(
             &state,
-            &payload.org,
+            &payload.org_id,
             &payload.dashboard,
             &payload.panel_title,
             &payload.metric_name,
@@ -242,11 +274,11 @@ async fn query_logs_handler(
         // Populate representative logs for each template (sorted by contribution already)
         let mut top_contributors = get_top_contributors(&jsd_result, 10);
         for contributor in &mut top_contributors {
-            // Get up to 3 representative logs for this template from processed_logs
+            // Get up to 2 representative logs for this template from processed_logs
             let representative = processed_logs
                 .iter()
                 .filter(|log| log.matched_template.as_ref() == Some(&contributor.template_id))
-                .take(3)
+                .take(2)
                 .map(|log| log.content.clone())
                 .collect::<Vec<_>>();
 
@@ -290,7 +322,7 @@ async fn query_logs_handler(
 /// Query logs and build histogram (for baseline calculation)
 async fn query_and_build_histogram(
     state: &AppState,
-    org: &str,
+    org_id: &str,
     dashboard: &str,
     graph_name: &str,
     metric_name: &str,
@@ -298,7 +330,7 @@ async fn query_and_build_histogram(
     end_time: DateTime<Utc>,
 ) -> Result<Histogram, (StatusCode, Json<ErrorResponse>)> {
     let metadata_query = MetadataQuery {
-        org: org.to_string(),
+        org_id: org_id.to_string(),
         dashboard: dashboard.to_string(),
         graph_name: graph_name.to_string(),
         metric_name: metric_name.to_string(),
@@ -337,18 +369,18 @@ async fn query_and_build_histogram(
 /// Query logs, process them, and build histogram (for current period)
 async fn query_and_process_logs(
     state: &AppState,
-    org: &str,
+    org_id: &str,
     dashboard: &str,
-    panel_title: &str,
+    graph_name: &str,
     metric_name: &str,
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
 ) -> Result<(Histogram, Vec<ProcessedLog>, usize, usize, usize), (StatusCode, Json<ErrorResponse>)>
 {
     let metadata_query = MetadataQuery {
-        org: org.to_string(),
+        org_id: org_id.to_string(),
         dashboard: dashboard.to_string(),
-        panel_title: panel_title.to_string(),
+        graph_name: graph_name.to_string(),
         metric_name: metric_name.to_string(),
         start_time,
         end_time,
