@@ -12,9 +12,12 @@ pub struct Config {
     pub clickhouse_database: String,
 
     // LLM configuration (Rig)
-    pub llm_provider: String, // e.g., "openai", "anthropic", "cohere"
+    pub llm_provider: String, // e.g., "openai", "anthropic", "cohere", "ollama"
     pub llm_api_key: String,
     pub llm_model: String, // e.g., "gpt-4", "claude-3-sonnet"
+
+    // Ollama configuration (optional)
+    pub ollama_endpoint: Option<String>, // e.g., "http://localhost:11434"
 }
 
 impl Config {
@@ -48,11 +51,14 @@ impl Config {
                     "openai" => "gpt-4".to_string(),
                     "anthropic" => "claude-3-sonnet-20240229".to_string(),
                     "cohere" => "command".to_string(),
+                    "ollama" => env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama2".to_string()),
                     _ => "gpt-4".to_string(),
                 }
             }),
 
             llm_provider,
+
+            ollama_endpoint: env::var("OLLAMA_ENDPOINT").ok(),
         })
     }
 
@@ -72,5 +78,8 @@ impl Config {
             "   LLM API Key: {}***",
             &self.llm_api_key.chars().take(4).collect::<String>()
         );
+        if let Some(ref endpoint) = self.ollama_endpoint {
+            tracing::info!("   Ollama Endpoint: {}", endpoint);
+        }
     }
 }

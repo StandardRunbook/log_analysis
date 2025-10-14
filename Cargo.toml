@@ -27,3 +27,20 @@ rig-core = "0.3"
 # gRPC client
 tonic = "0.12"
 prost = "0.13"
+
+# Parallel processing
+rayon = "1.8"
+
+# Structural sharing / persistent data structures
+arc-swap = "1.7"
+im = "15.1"
+
+# LRU cache
+lru = "0.12"
+
+# SIMD string matching
+memchr = "2.7"  # SIMD-optimized byte searching
+aho-corasick = "1.1"  # Multi-pattern DFA matching
+
+# Zero-copy and arena allocation
+bumpalo = "3.14"  # Fast bump allocator (arena)

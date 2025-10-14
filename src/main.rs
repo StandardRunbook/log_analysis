@@ -50,7 +50,6 @@ struct ProcessedLog {
     content: String,
     stream_id: String,
     matched_template: Option<u64>,
-    extracted_values: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -440,12 +439,9 @@ async fn query_and_process_logs(
             matcher.match_log(&log_entry.content)
         };
 
-        let (template_id, extracted_values) = if match_result.matched {
+        let template_id = if let Some(tid) = match_result {
             matched_count += 1;
-            (
-                match_result.template_id.clone(),
-                match_result.extracted_values,
-            )
+            Some(tid)
         } else {
             unmatched_count += 1;
             info!("No template match for log: {}", log_entry.content);
@@ -467,11 +463,11 @@ async fn query_and_process_logs(
                         matcher.match_log(&log_entry.content)
                     };
 
-                    (new_match.template_id.clone(), new_match.extracted_values)
+                    new_match
                 }
                 Err(e) => {
                     tracing::warn!("Failed to generate template: {}", e);
-                    (None, std::collections::HashMap::new())
+                    None
                 }
             }
         };
@@ -486,7 +482,6 @@ async fn query_and_process_logs(
             content: log_entry.content,
             stream_id: log_entry.stream_id,
             matched_template: template_id,
-            extracted_values,
         });
     }
 
@@ -514,10 +509,8 @@ async fn build_histogram_from_logs(state: &AppState, logs: &[LogEntry]) -> Histo
             matcher.match_log(&log_entry.content)
         };
 
-        if match_result.matched {
-            if let Some(template_id) = match_result.template_id {
-                histogram.add(template_id);
-            }
+        if let Some(template_id) = match_result {
+            histogram.add(template_id);
         }
     }
 
