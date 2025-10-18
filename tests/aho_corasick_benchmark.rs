@@ -1,8 +1,7 @@
 // Aho-Corasick DFA benchmark - general-purpose log matching
-// Returns only template IDs, no value extraction
+// Uses the actual LogMatcher implementation from src/log_matcher.rs
 
-mod aho_corasick_matcher;
-use aho_corasick_matcher::{AhoCorasickMatcher, LogTemplate};
+use log_analyzer::log_matcher::{LogMatcher, LogTemplate};
 use rayon::prelude::*;
 use std::sync::Arc;
 use std::time::Instant;
@@ -93,37 +92,34 @@ fn generate_mock_logs(count: usize) -> Vec<String> {
     logs
 }
 
-fn setup_matcher(cache_size: usize) -> Arc<AhoCorasickMatcher> {
-    let matcher = AhoCorasickMatcher::new(cache_size);
+fn setup_matcher() -> LogMatcher {
+    let mut matcher = LogMatcher::new();
 
+    // Add additional templates beyond the 3 default ones
     let templates = vec![
         LogTemplate {
-            template_id: 4,
+            template_id: 0, // Auto-assigned
             pattern: r"network_traffic: (\d+)Mbps - Network load (.*)".to_string(),
-            variables: vec!["throughput".to_string(), "status".to_string()],
-            example: "network_traffic: 500Mbps - Network load moderate".to_string(),
-            prefix: "network_traffic: ".to_string(),
+            variables: vec!["bandwidth".to_string(), "status".to_string()],
+            example: "network_traffic: 100Mbps - Network load moderate".to_string(),
         },
         LogTemplate {
-            template_id: 5,
+            template_id: 0,
             pattern: r"error_rate: (\d+\.\d+)% - System status (.*)".to_string(),
             variables: vec!["rate".to_string(), "status".to_string()],
-            example: "error_rate: 0.05% - System status healthy".to_string(),
-            prefix: "error_rate: ".to_string(),
+            example: "error_rate: 0.50% - System status healthy".to_string(),
         },
         LogTemplate {
-            template_id: 6,
+            template_id: 0,
             pattern: r"request_latency: (\d+)ms - Response time (.*)".to_string(),
             variables: vec!["latency".to_string(), "status".to_string()],
-            example: "request_latency: 125ms - Response time acceptable".to_string(),
-            prefix: "request_latency: ".to_string(),
+            example: "request_latency: 50ms - Response time optimal".to_string(),
         },
         LogTemplate {
-            template_id: 7,
+            template_id: 0,
             pattern: r"database_connections: (\d+) - Pool status (.*)".to_string(),
-            variables: vec!["count".to_string(), "status".to_string()],
-            example: "database_connections: 45 - Pool status healthy".to_string(),
-            prefix: "database_connections: ".to_string(),
+            variables: vec!["connections".to_string(), "status".to_string()],
+            example: "database_connections: 50 - Pool status healthy".to_string(),
         },
     ];
 
@@ -131,147 +127,214 @@ fn setup_matcher(cache_size: usize) -> Arc<AhoCorasickMatcher> {
         matcher.add_template(template);
     }
 
-    Arc::new(matcher)
-}
-
-fn run_benchmark(name: &str, log_count: usize, cache_size: usize, thread_count: Option<usize>) {
-    if let Some(threads) = thread_count {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build_global()
-            .ok();
-    }
-
-    let actual_threads = rayon::current_num_threads();
-
-    println!("\n{}", "=".repeat(60));
-    println!("📊 Benchmark (Aho-Corasick DFA): {}", name);
-    println!("   Threads: {}", actual_threads);
-    println!("   Cache size: {}", cache_size);
-    println!("{}", "=".repeat(60));
-
-    println!("⚙️  Setting up Aho-Corasick DFA matcher...");
-    let matcher = setup_matcher(cache_size);
-    let template_count = matcher.get_all_templates().len();
-    println!("   ✓ {} templates loaded", template_count);
-    println!("   ✓ Aho-Corasick DFA (finds ALL patterns in O(n))");
-    println!("   ✓ LRU cache enabled (size: {})", cache_size);
-
-    println!("📝 Generating {} mock logs...", log_count);
-    let start = Instant::now();
-    let logs = generate_mock_logs(log_count);
-    let gen_duration = start.elapsed();
-    println!(
-        "   ✓ Generated in {:.2}ms",
-        gen_duration.as_secs_f64() * 1000.0
-    );
-
-    println!("🔍 Processing logs (DFA + fast matching + parallel)...");
-    let start = Instant::now();
-
-    // Fast matching - just get template IDs
-    let results: Vec<_> = logs.par_iter().map(|log| matcher.match_log(log)).collect();
-
-    let duration = start.elapsed();
-
-    let matched = results.iter().filter(|m| m.is_some()).count();
-    let unmatched = results.len() - matched;
-
-    let total_ms = duration.as_secs_f64() * 1000.0;
-    let logs_per_second = log_count as f64 / duration.as_secs_f64();
-    let avg_latency_us = (duration.as_micros() as f64) / log_count as f64;
-
-    let (cache_used, cache_cap) = matcher.cache_stats();
-
-    println!("\n📈 Results:");
-    println!("   Total logs processed:  {}", log_count);
-    println!(
-        "   Matched:               {} ({:.1}%)",
-        matched,
-        (matched as f64 / log_count as f64) * 100.0
-    );
-    println!(
-        "   Unmatched:             {} ({:.1}%)",
-        unmatched,
-        (unmatched as f64 / log_count as f64) * 100.0
-    );
-    println!("\n⚡ Performance:");
-    println!("   Total time:            {:.2}ms", total_ms);
-    println!(
-        "   Throughput:            {:.0} logs/sec 🚀🚀",
-        logs_per_second
-    );
-    println!("   Avg latency:           {:.2}μs per log", avg_latency_us);
-    println!(
-        "   Per-thread throughput: {:.0} logs/sec",
-        logs_per_second / actual_threads as f64
-    );
-    println!("   Speedup vs baseline:   {:.2}x", logs_per_second / 7800.0);
-
-    println!("\n💾 Optimization Stack:");
-    println!("   ✓ Aho-Corasick DFA (O(n) multi-pattern)");
-    println!("   ✓ Regex validation (regex.is_match only)");
-    println!("   ✓ No value extraction (template ID only)");
-    println!("   ✓ Structural sharing (lock-free)");
-    println!("   ✓ Parallel processing ({} threads)", actual_threads);
-    println!("   Templates:             {}", template_count);
+    matcher
 }
 
 #[test]
 fn benchmark_ac_100k() {
-    run_benchmark("100K logs, Aho-Corasick", 100_000, 1000, None);
+    let matcher = setup_matcher();
+    let logs = generate_mock_logs(100_000);
+
+    println!("\n============================================================");
+    println!("📊 Aho-Corasick Benchmark: 100K logs");
+    println!("============================================================");
+
+    let log_refs: Vec<&str> = logs.iter().map(|s| s.as_str()).collect();
+
+    let start = Instant::now();
+    let results = matcher.match_batch(&log_refs);
+    let elapsed = start.elapsed();
+
+    let matched = results.iter().filter(|r| r.is_some()).count();
+    let unmatched = results.len() - matched;
+
+    let throughput = (logs.len() as f64 / elapsed.as_secs_f64()) as u64;
+    let avg_latency_us = (elapsed.as_micros() as f64) / (logs.len() as f64);
+
+    println!("📈 Results:");
+    println!("   Total logs:            {:>10}", logs.len());
+    println!(
+        "   Matched:               {:>10} ({:.1}%)",
+        matched,
+        (matched as f64 / logs.len() as f64) * 100.0
+    );
+    println!("   Unmatched:             {:>10}", unmatched);
+    println!();
+    println!("⚡ Performance:");
+    println!("   Total time:            {:>10.2}ms", elapsed.as_millis());
+    println!("   Throughput:            {:>10} logs/sec", throughput);
+    println!(
+        "   Avg latency:           {:>10.2}μs per log",
+        avg_latency_us
+    );
+    println!("============================================================\n");
+
+    assert!(matched > logs.len() * 90 / 100); // At least 90% match rate
 }
 
 #[test]
 fn benchmark_ac_1m() {
-    run_benchmark("1M logs, Aho-Corasick", 1_000_000, 10000, None);
-}
+    let matcher = setup_matcher();
+    let logs = generate_mock_logs(1_000_000);
 
-#[test]
-fn benchmark_ac_10m() {
-    run_benchmark("10M logs, Aho-Corasick", 10_000_000, 10000, None);
-}
+    println!("\n============================================================");
+    println!("📊 Aho-Corasick Benchmark: 1M logs");
+    println!("============================================================");
 
-#[test]
-fn benchmark_ac_scaling() {
-    println!("\n{}", "█".repeat(60));
-    println!("🔥 AHO-CORASICK DFA - ULTIMATE OPTIMIZATION");
-    println!("   DFA finds ALL patterns in ONE PASS!");
-    println!("{}\n", "█".repeat(60));
+    let log_refs: Vec<&str> = logs.iter().map(|s| s.as_str()).collect();
 
-    let log_count = 100_000;
+    let start = Instant::now();
+    let results = matcher.match_batch(&log_refs);
+    let elapsed = start.elapsed();
 
-    for threads in [1, 2, 4, 8] {
-        run_benchmark(
-            &format!("100K logs, {} thread(s)", threads),
-            log_count,
-            1000,
-            Some(threads),
-        );
-        println!();
-    }
+    let matched = results.iter().filter(|r| r.is_some()).count();
+    let unmatched = results.len() - matched;
 
-    println!("{}", "█".repeat(60));
-    println!("✅ Aho-Corasick benchmark completed!");
-    println!("   DFA + LRU Cache + Structural Sharing + Parallel");
-    println!("{}", "█".repeat(60));
+    let throughput = (logs.len() as f64 / elapsed.as_secs_f64()) as u64;
+    let avg_latency_us = (elapsed.as_micros() as f64) / (logs.len() as f64);
+
+    println!("📈 Results:");
+    println!("   Total logs:            {:>10}", logs.len());
+    println!(
+        "   Matched:               {:>10} ({:.1}%)",
+        matched,
+        (matched as f64 / logs.len() as f64) * 100.0
+    );
+    println!("   Unmatched:             {:>10}", unmatched);
+    println!();
+    println!("⚡ Performance:");
+    println!("   Total time:            {:>10.2}ms", elapsed.as_millis());
+    println!("   Throughput:            {:>10} logs/sec", throughput);
+    println!(
+        "   Avg latency:           {:>10.2}μs per log",
+        avg_latency_us
+    );
+    println!("============================================================\n");
+
+    assert!(matched > logs.len() * 90 / 100);
 }
 
 #[test]
 fn benchmark_absolute_maximum() {
-    println!("\n{}", "█".repeat(60));
-    println!("💥 ABSOLUTE MAXIMUM PERFORMANCE");
-    println!("   Aho-Corasick DFA: The ultimate multi-pattern matcher");
-    println!("{}\n", "█".repeat(60));
+    let matcher = Arc::new(setup_matcher());
+    let total_logs = 10_000_000;
+    let batch_size = 100_000;
 
-    // 1M logs
-    run_benchmark("1M logs - MAXIMUM POWER", 1_000_000, 10000, None);
+    println!("\n============================================================");
+    println!("📊 Absolute Maximum Benchmark: 10M logs (parallel batches)");
+    println!("============================================================");
 
-    println!("\n{}", "█".repeat(60));
-    println!("🎯 Comparison:");
-    println!("   Baseline:       7,800 logs/sec");
-    println!("   SIMD:           420,000 logs/sec (54x)");
-    println!("   Aho-Corasick:   ??? logs/sec");
-    println!("\n   Goal: Beat 420K logs/sec!");
-    println!("{}", "█".repeat(60));
+    let start = Instant::now();
+
+    let num_batches = total_logs / batch_size;
+    let total_matched: usize = (0..num_batches)
+        .into_par_iter()
+        .map(|_| {
+            let logs = generate_mock_logs(batch_size);
+            let log_refs: Vec<&str> = logs.iter().map(|s| s.as_str()).collect();
+            let results = matcher.match_batch(&log_refs);
+            results.iter().filter(|r| r.is_some()).count()
+        })
+        .sum();
+
+    let elapsed = start.elapsed();
+
+    let throughput = (total_logs as f64 / elapsed.as_secs_f64()) as u64;
+    let avg_latency_us = (elapsed.as_micros() as f64) / (total_logs as f64);
+
+    println!("📈 Results:");
+    println!("   Total logs:            {:>10}", total_logs);
+    println!(
+        "   Matched:               {:>10} ({:.1}%)",
+        total_matched,
+        (total_matched as f64 / total_logs as f64) * 100.0
+    );
+    println!("   Batch size:            {:>10}", batch_size);
+    println!();
+    println!("⚡ Performance:");
+    println!("   Total time:            {:>10.2}s", elapsed.as_secs_f64());
+    println!("   Throughput:            {:>10} logs/sec", throughput);
+    println!(
+        "   Avg latency:           {:>10.2}μs per log",
+        avg_latency_us
+    );
+    println!("============================================================\n");
+
+    assert!(total_matched > total_logs * 90 / 100);
+}
+
+#[test]
+fn benchmark_ac_10m() {
+    let matcher = Arc::new(setup_matcher());
+    let total_logs = 10_000_000;
+    let batch_size = 50_000;
+
+    println!("\n============================================================");
+    println!("📊 Aho-Corasick Benchmark: 10M logs (sequential batches)");
+    println!("============================================================");
+
+    let start = Instant::now();
+
+    let mut total_matched = 0;
+    for _ in 0..(total_logs / batch_size) {
+        let logs = generate_mock_logs(batch_size);
+        let log_refs: Vec<&str> = logs.iter().map(|s| s.as_str()).collect();
+        let results = matcher.match_batch(&log_refs);
+        total_matched += results.iter().filter(|r| r.is_some()).count();
+    }
+
+    let elapsed = start.elapsed();
+
+    let throughput = (total_logs as f64 / elapsed.as_secs_f64()) as u64;
+    let avg_latency_us = (elapsed.as_micros() as f64) / (total_logs as f64);
+
+    println!("📈 Results:");
+    println!("   Total logs:            {:>10}", total_logs);
+    println!(
+        "   Matched:               {:>10} ({:.1}%)",
+        total_matched,
+        (total_matched as f64 / total_logs as f64) * 100.0
+    );
+    println!("   Batch size:            {:>10}", batch_size);
+    println!();
+    println!("⚡ Performance:");
+    println!("   Total time:            {:>10.2}s", elapsed.as_secs_f64());
+    println!("   Throughput:            {:>10} logs/sec", throughput);
+    println!(
+        "   Avg latency:           {:>10.2}μs per log",
+        avg_latency_us
+    );
+    println!("============================================================\n");
+
+    assert!(total_matched > total_logs * 90 / 100);
+}
+
+#[test]
+fn benchmark_ac_scaling() {
+    println!("\n============================================================");
+    println!("📊 Aho-Corasick Scaling Analysis");
+    println!("============================================================\n");
+
+    let scales = vec![1_000, 10_000, 100_000, 1_000_000];
+
+    for &count in &scales {
+        let matcher = setup_matcher();
+        let logs = generate_mock_logs(count);
+        let log_refs: Vec<&str> = logs.iter().map(|s| s.as_str()).collect();
+
+        let start = Instant::now();
+        let results = matcher.match_batch(&log_refs);
+        let elapsed = start.elapsed();
+
+        let _matched = results.iter().filter(|r| r.is_some()).count();
+        let throughput = (count as f64 / elapsed.as_secs_f64()) as u64;
+        let avg_latency_us = (elapsed.as_micros() as f64) / (count as f64);
+
+        println!(
+            "{:>10} logs: {:>8} logs/sec, {:>6.2}μs/log",
+            count, throughput, avg_latency_us
+        );
+    }
+
+    println!("============================================================\n");
 }
