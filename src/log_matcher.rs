@@ -1,16 +1,44 @@
-// Optimized log matcher using Aho-Corasick DFA + structural sharing
-// General-purpose solution that works with any log format
-// Achieves 2.5M+ logs/sec throughput
-
+use crate::matcher_config::MatcherConfig;
 use aho_corasick::AhoCorasick;
 use arc_swap::ArcSwap;
 use im::HashMap as ImHashMap;
 use regex::Regex;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
+
+// Thread-local scratch space for zero-copy matching
+thread_local! {
+    static SCRATCH: RefCell<ScratchSpace> = RefCell::new(ScratchSpace::new());
+}
+
+struct ScratchSpace {
+    template_matches: FxHashMap<u64, FxHashSet<u32>>,
+    candidates: Vec<(u64, usize, usize)>,
+}
+
+impl ScratchSpace {
+    fn new() -> Self {
+        Self {
+            template_matches: FxHashMap::default(),
+            candidates: Vec::with_capacity(32),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.template_matches.clear();
+        self.candidates.clear();
+    }
+}
+
+#[allow(dead_code)]
+static TOKENIZER: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+    Regex::new(r#"(?:://)|(?:(?:[\s'`";=()\[\]{}?@&<>:\n\t\r,])|(?:[\.](\s+|$))|(?:\\["']))+"#).unwrap()
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogTemplate {
@@ -20,124 +48,260 @@ pub struct LogTemplate {
     pub example: String,
 }
 
-// No MatchResult needed - we just return Option<u64> for template ID
-
 #[derive(Clone)]
 struct MatcherSnapshot {
-    // Aho-Corasick automaton for multi-pattern matching
     ac: Arc<AhoCorasick>,
-    // Map pattern index to template
-    pattern_to_template: ImHashMap<usize, Arc<LogTemplate>>,
-    // Compiled regex patterns for validation
+    fragment_to_template: ImHashMap<usize, Vec<(u64, usize)>>,
+    template_fragments: ImHashMap<u64, Vec<u32>>,
+    fragment_id_to_string: ImHashMap<u32, String>,
+    fragment_string_to_id: ImHashMap<String, u32>,
+    next_fragment_id: u32,
     patterns: ImHashMap<u64, Arc<Regex>>,
-    // Store prefixes for each template (for rebuilding AC)
-    prefixes: ImHashMap<usize, String>,
+    templates: ImHashMap<u64, Arc<LogTemplate>>,
+    config: MatcherConfig,
 }
 
 impl MatcherSnapshot {
     fn new() -> Self {
+        Self::with_config(MatcherConfig::default())
+    }
+
+    fn with_config(config: MatcherConfig) -> Self {
         Self {
             ac: Arc::new(AhoCorasick::new(&[""] as &[&str]).unwrap()),
-            pattern_to_template: ImHashMap::new(),
+            fragment_to_template: ImHashMap::new(),
+            template_fragments: ImHashMap::new(),
+            fragment_id_to_string: ImHashMap::new(),
+            fragment_string_to_id: ImHashMap::new(),
+            next_fragment_id: 0,
             patterns: ImHashMap::new(),
-            prefixes: ImHashMap::new(),
+            templates: ImHashMap::new(),
+            config,
         }
     }
 
     fn add_template(mut self, template: LogTemplate) -> Self {
         let template_id = template.template_id;
-        let prefix = extract_prefix(&template.pattern);
+        let fragments = extract_fragments(&template.pattern, self.config.min_fragment_length);
 
-        // Compile regex for full pattern validation
         if let Ok(regex) = Regex::new(&template.pattern) {
             self.patterns.insert(template_id, Arc::new(regex));
         }
 
-        // Store template and its prefix
-        let pattern_idx = self.pattern_to_template.len();
-        self.pattern_to_template
-            .insert(pattern_idx, Arc::new(template));
-        self.prefixes.insert(pattern_idx, prefix);
+        self.templates.insert(template_id, Arc::new(template));
 
-        // Rebuild Aho-Corasick automaton with all prefixes
-        let prefixes: Vec<&str> = (0..self.prefixes.len())
-            .filter_map(|i| self.prefixes.get(&i).map(|s| s.as_str()))
+        let mut fragment_ids = Vec::new();
+        for frag in &fragments {
+            if !frag.is_empty() {
+                let frag_id = if let Some(&id) = self.fragment_string_to_id.get(frag) {
+                    id
+                } else {
+                    let id = self.next_fragment_id;
+                    self.next_fragment_id += 1;
+                    self.fragment_string_to_id.insert(frag.clone(), id);
+                    self.fragment_id_to_string.insert(id, frag.clone());
+                    id
+                };
+                fragment_ids.push(frag_id);
+            }
+        }
+
+        self.template_fragments.insert(template_id, fragment_ids.clone());
+
+        use std::collections::HashMap;
+        let mut fragment_id_map: HashMap<u32, Vec<(u64, usize)>> = HashMap::new();
+
+        for (tid, frag_ids) in self.template_fragments.iter() {
+            for (frag_idx, &frag_id) in frag_ids.iter().enumerate() {
+                fragment_id_map
+                    .entry(frag_id)
+                    .or_insert_with(Vec::new)
+                    .push((*tid, frag_idx));
+            }
+        }
+
+        let mut unique_fragment_ids: Vec<u32> = fragment_id_map.keys().copied().collect();
+        unique_fragment_ids.sort();
+
+        let fragment_strings: Vec<String> = unique_fragment_ids
+            .iter()
+            .filter_map(|id| self.fragment_id_to_string.get(id).cloned())
             .collect();
 
-        if let Ok(ac) = AhoCorasick::new(&prefixes) {
-            self.ac = Arc::new(ac);
+        self.fragment_to_template.clear();
+
+        for (ac_idx, &frag_id) in unique_fragment_ids.iter().enumerate() {
+            if let Some(template_frags) = fragment_id_map.get(&frag_id) {
+                self.fragment_to_template.insert(ac_idx, template_frags.clone());
+            }
+        }
+
+        if !fragment_strings.is_empty() {
+            let fragment_strs: Vec<&str> = fragment_strings.iter().map(|s| s.as_str()).collect();
+            if let Ok(ac) = AhoCorasick::builder()
+                .match_kind(self.config.to_ac_match_kind())
+                .build(&fragment_strs)
+            {
+                self.ac = Arc::new(ac);
+            }
         }
 
         self
     }
 
-    /// Match log and return template ID - Aho-Corasick + regex validation
     fn match_log(&self, log_line: &str) -> Option<u64> {
-        // Aho-Corasick finds ALL matching prefix candidates in O(n)
-        // This handles cases where multiple templates share the same prefix
-        for mat in self.ac.find_iter(log_line) {
-            if let Some(template) = self.pattern_to_template.get(&mat.pattern().as_usize()) {
-                // Validate full pattern with regex
-                if let Some(regex) = self.patterns.get(&template.template_id) {
-                    if regex.is_match(log_line) {
-                        return Some(template.template_id);
-                    }
-                }
-            }
-        }
-        None
-    }
+        // Use thread-local scratch space to avoid allocations
+        SCRATCH.with(|scratch| {
+            let mut scratch = scratch.borrow_mut();
+            scratch.clear();
 
-    /// Batch match multiple logs at once (amortizes overhead)
-    fn match_batch(&self, log_lines: &[&str]) -> Vec<Option<u64>> {
-        log_lines
-            .iter()
-            .map(|log_line| {
-                // Check ALL matching prefixes, not just the first one
-                for mat in self.ac.find_iter(log_line) {
-                    if let Some(template) = self.pattern_to_template.get(&mat.pattern().as_usize())
-                    {
-                        // Validate full pattern with regex
-                        if let Some(regex) = self.patterns.get(&template.template_id) {
-                            if regex.is_match(log_line) {
-                                return Some(template.template_id);
+            for mat in self.ac.find_iter(log_line) {
+                if let Some(template_list) = self.fragment_to_template.get(&mat.pattern().as_usize()) {
+                    for &(template_id, fragment_idx) in template_list {
+                        if let Some(required_fragments) = self.template_fragments.get(&template_id) {
+                            if let Some(&fragment_id) = required_fragments.get(fragment_idx) {
+                                scratch.template_matches
+                                    .entry(template_id)
+                                    .or_insert_with(FxHashSet::default)
+                                    .insert(fragment_id);
                             }
                         }
                     }
                 }
-                None
-            })
-            .collect()
+            }
+
+            // Build candidates list (avoid borrowing issues by collecting first)
+            let candidates_data: Vec<_> = scratch.template_matches
+                .iter()
+                .filter_map(|(template_id, matched_fragments)| {
+                    self.template_fragments.get(template_id)
+                        .map(|required| (*template_id, matched_fragments.len(), required.len()))
+                })
+                .collect();
+
+            scratch.candidates.extend(candidates_data);
+
+            scratch.candidates.sort_unstable_by(|a, b| {
+                let a_ratio = a.1 as f64 / a.2.max(1) as f64;
+                let b_ratio = b.1 as f64 / b.2.max(1) as f64;
+                b_ratio.partial_cmp(&a_ratio).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            for (template_id, matched_count, required_count) in &scratch.candidates {
+                let match_ratio = *matched_count as f64 / (*required_count).max(1) as f64;
+                if match_ratio >= self.config.fragment_match_threshold {
+                    if let Some(regex) = self.patterns.get(template_id) {
+                        if regex.is_match(log_line) {
+                            return Some(*template_id);
+                        }
+                    }
+                }
+            }
+
+            None
+        })
     }
 
-    fn get_all_templates(&self) -> Vec<LogTemplate> {
-        self.pattern_to_template
-            .values()
-            .map(|t| (**t).clone())
+    fn match_batch(&self, log_lines: &[&str]) -> Vec<Option<u64>> {
+        log_lines
+            .iter()
+            .map(|log_line| self.match_log(log_line))
             .collect()
     }
 }
 
-/// Extract a static prefix from a pattern for Aho-Corasick indexing
-fn extract_prefix(pattern: &str) -> String {
-    // Take characters up to the first regex metacharacter or variable
-    pattern
-        .chars()
-        .take_while(|c| !matches!(c, '(' | '[' | '.' | '*' | '+' | '?' | '\\'))
-        .collect()
+#[allow(dead_code)]
+fn tokenize(text: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut last_end = 0;
+
+    for mat in TOKENIZER.find_iter(text) {
+        if mat.start() > last_end {
+            tokens.push(&text[last_end..mat.start()]);
+        }
+        last_end = mat.end();
+    }
+
+    if last_end < text.len() {
+        tokens.push(&text[last_end..]);
+    }
+
+    tokens
 }
 
-/// Optimized log matcher with Aho-Corasick DFA + structural sharing
+fn extract_fragments(pattern: &str, min_length: usize) -> Vec<String> {
+    let mut fragments = Vec::new();
+    let mut current_fragment = String::new();
+    let mut chars = pattern.chars().peekable();
+    let mut depth = 0;
+    let mut in_char_class = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                if let Some(&next_ch) = chars.peek() {
+                    if depth == 0 && !in_char_class {
+                        chars.next();
+                        current_fragment.push(next_ch);
+                    } else {
+                        chars.next();
+                    }
+                }
+            }
+            '[' if depth == 0 && !in_char_class => {
+                in_char_class = true;
+                if !current_fragment.is_empty() {
+                    fragments.push(current_fragment.clone());
+                    current_fragment.clear();
+                }
+            }
+            ']' if in_char_class => {
+                in_char_class = false;
+            }
+            '(' if !in_char_class => {
+                depth += 1;
+                if depth == 1 && !current_fragment.is_empty() {
+                    fragments.push(current_fragment.clone());
+                    current_fragment.clear();
+                }
+            }
+            ')' if !in_char_class => {
+                depth -= 1;
+            }
+            '.' | '*' | '+' | '?' | '{' | '}' | '^' | '$' | '|' if depth == 0 && !in_char_class => {
+                if !current_fragment.is_empty() {
+                    fragments.push(current_fragment.clone());
+                    current_fragment.clear();
+                }
+            }
+            _ if depth == 0 && !in_char_class => {
+                current_fragment.push(ch);
+            }
+            _ => {}
+        }
+    }
+
+    if !current_fragment.is_empty() {
+        fragments.push(current_fragment);
+    }
+
+    fragments.into_iter().filter(|f| f.len() >= min_length).collect()
+}
+
 pub struct LogMatcher {
     snapshot: ArcSwap<MatcherSnapshot>,
     next_template_id: Arc<AtomicU64>,
+    config: MatcherConfig,
 }
 
 impl LogMatcher {
     pub fn new() -> Self {
-        let mut snapshot = MatcherSnapshot::new();
+        Self::with_config(MatcherConfig::default())
+    }
 
-        // Add default templates
+    pub fn with_config(config: MatcherConfig) -> Self {
+        let mut snapshot = MatcherSnapshot::with_config(config.clone());
+
         let default_templates = vec![
             LogTemplate {
                 template_id: 1,
@@ -166,7 +330,18 @@ impl LogMatcher {
         Self {
             snapshot: ArcSwap::new(Arc::new(snapshot)),
             next_template_id: Arc::new(AtomicU64::new(4)), // Start after default templates
+            config,
         }
+    }
+
+    /// Get the current configuration
+    pub fn config(&self) -> &MatcherConfig {
+        &self.config
+    }
+
+    /// Get the optimal batch size hint
+    pub fn optimal_batch_size(&self) -> usize {
+        self.config.optimal_batch_size
     }
 
     /// Generate next template ID
@@ -214,7 +389,136 @@ impl LogMatcher {
     /// Get all templates for inspection
     pub fn get_all_templates(&self) -> Vec<LogTemplate> {
         let snapshot = self.snapshot.load();
-        snapshot.get_all_templates()
+        snapshot.templates.values().map(|t| (**t).clone()).collect()
+    }
+
+    /// Save the matcher state to a file
+    /// This serializes all templates; the Aho-Corasick DFA will be rebuilt on load
+    pub fn save_to_file(&self, path: &str) -> anyhow::Result<()> {
+        use std::fs::File;
+        use std::io::Write;
+
+        let snapshot = self.snapshot.load();
+        let templates: Vec<LogTemplate> = snapshot.templates.values().map(|t| (**t).clone()).collect();
+        let next_id = self.next_template_id.load(Ordering::SeqCst);
+
+        #[derive(Serialize, Deserialize)]
+        struct MatcherState {
+            templates: Vec<LogTemplate>,
+            next_template_id: u64,
+        }
+
+        let state = MatcherState {
+            templates,
+            next_template_id: next_id,
+        };
+
+        let encoded = bincode::serialize(&state)?;
+        let mut file = File::create(path)?;
+        file.write_all(&encoded)?;
+
+        tracing::info!("Saved {} templates to {}", state.templates.len(), path);
+        Ok(())
+    }
+
+    /// Load the matcher state from a file
+    /// Rebuilds the Aho-Corasick DFA from saved templates
+    pub fn load_from_file(path: &str) -> anyhow::Result<Self> {
+        use std::fs::File;
+        use std::io::Read;
+
+        let mut file = File::open(path)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+
+        #[derive(Serialize, Deserialize)]
+        struct MatcherState {
+            templates: Vec<LogTemplate>,
+            next_template_id: u64,
+        }
+
+        let state: MatcherState = bincode::deserialize(&buffer)?;
+
+        // Create new matcher without default templates
+        let mut snapshot = MatcherSnapshot::new();
+
+        // Add all loaded templates
+        for template in &state.templates {
+            snapshot = snapshot.add_template(template.clone());
+        }
+
+        tracing::info!("Loaded {} templates from {}", state.templates.len(), path);
+
+        Ok(Self {
+            snapshot: ArcSwap::new(Arc::new(snapshot)),
+            next_template_id: Arc::new(AtomicU64::new(state.next_template_id)),
+            config: MatcherConfig::default(),
+        })
+    }
+
+    /// Save to JSON (human-readable, for debugging)
+    pub fn save_to_json(&self, path: &str) -> anyhow::Result<()> {
+        use std::fs::File;
+
+        let snapshot = self.snapshot.load();
+        let templates: Vec<LogTemplate> = snapshot.templates.values().map(|t| (**t).clone()).collect();
+        let next_id = self.next_template_id.load(Ordering::SeqCst);
+
+        #[derive(Serialize, Deserialize)]
+        struct MatcherState {
+            templates: Vec<LogTemplate>,
+            next_template_id: u64,
+        }
+
+        let state = MatcherState {
+            templates,
+            next_template_id: next_id,
+        };
+
+        let file = File::create(path)?;
+        serde_json::to_writer_pretty(file, &state)?;
+
+        tracing::info!(
+            "Saved {} templates to {} (JSON)",
+            state.templates.len(),
+            path
+        );
+        Ok(())
+    }
+
+    /// Load from JSON
+    pub fn load_from_json(path: &str) -> anyhow::Result<Self> {
+        use std::fs::File;
+
+        let file = File::open(path)?;
+
+        #[derive(Serialize, Deserialize)]
+        struct MatcherState {
+            templates: Vec<LogTemplate>,
+            next_template_id: u64,
+        }
+
+        let state: MatcherState = serde_json::from_reader(file)?;
+
+        // Create new matcher without default templates
+        let mut snapshot = MatcherSnapshot::new();
+
+        // Add all loaded templates
+        for template in &state.templates {
+            snapshot = snapshot.add_template(template.clone());
+        }
+
+        tracing::info!(
+            "Loaded {} templates from {} (JSON)",
+            state.templates.len(),
+            path
+        );
+
+        Ok(Self {
+            snapshot: ArcSwap::new(Arc::new(snapshot)),
+            next_template_id: Arc::new(AtomicU64::new(state.next_template_id)),
+            config: MatcherConfig::default(),
+        })
     }
 }
 
@@ -231,6 +535,7 @@ impl Clone for LogMatcher {
             next_template_id: Arc::new(AtomicU64::new(
                 self.next_template_id.load(Ordering::SeqCst),
             )),
+            config: self.config.clone(),
         }
     }
 }
@@ -379,5 +684,153 @@ mod tests {
 
         // Should not match if pattern doesn't fit any template
         assert_eq!(matcher.match_log("error: something else entirely"), None);
+    }
+
+    #[test]
+    fn test_fragment_extraction() {
+        // Test that fragments are correctly extracted
+        let fragments =
+            extract_fragments(r"Request ([a-zA-Z0-9_]+) completed in (\d+)ms with status (\d{3})", 2);
+        assert_eq!(
+            fragments,
+            vec!["Request ", " completed in ", "ms with status "]
+        );
+
+        // Test pattern with middle fragment (% is literal, not metacharacter)
+        let fragments = extract_fragments(r"cpu_usage: (\d+\.\d+)% - (.*)", 2);
+        assert_eq!(fragments, vec!["cpu_usage: ", "% - "]);
+
+        // Test pattern with multiple middle fragments
+        let fragments = extract_fragments(r"error: connection timeout after (\d+)ms", 2);
+        assert_eq!(fragments, vec!["error: connection timeout after ", "ms"]);
+
+        // Test pattern with escaped characters
+        let fragments = extract_fragments(r"path: /var/log/(\w+)\.log", 2);
+        assert_eq!(fragments, vec!["path: /var/log/", ".log"]);
+    }
+
+    #[test]
+    fn test_multi_fragment_matching() {
+        let mut matcher = LogMatcher::new();
+
+        // Add templates with distinctive middle/suffix fragments
+        matcher.add_template(LogTemplate {
+            template_id: 20,
+            pattern: r"Request ([a-zA-Z0-9_]+) completed in (\d+)ms with status (\d{3})"
+                .to_string(),
+            variables: vec![
+                "request_id".to_string(),
+                "duration".to_string(),
+                "status".to_string(),
+            ],
+            example: "Request req_abc123 completed in 145ms with status 200".to_string(),
+        });
+
+        matcher.add_template(LogTemplate {
+            template_id: 21,
+            pattern: r"Request ([a-zA-Z0-9_]+) failed in (\d+)ms with error (.*)".to_string(),
+            variables: vec![
+                "request_id".to_string(),
+                "duration".to_string(),
+                "error".to_string(),
+            ],
+            example: "Request req_xyz789 failed in 200ms with error timeout".to_string(),
+        });
+
+        // Should match based on middle fragments
+        assert_eq!(
+            matcher.match_log("Request req_abc123 completed in 145ms with status 200"),
+            Some(20)
+        );
+
+        assert_eq!(
+            matcher.match_log("Request req_xyz789 failed in 200ms with error timeout"),
+            Some(21)
+        );
+
+        // Should not match if middle fragments don't match
+        assert_eq!(
+            matcher.match_log("Request req_abc123 something else entirely"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_multi_fragment_disambiguation() {
+        let mut matcher = LogMatcher::new();
+
+        // These patterns share the same prefix but differ in middle/suffix
+        matcher.add_template(LogTemplate {
+            template_id: 30,
+            pattern: r"Transaction ([a-zA-Z0-9_]+) completed successfully with amount (\d+)"
+                .to_string(),
+            variables: vec!["txn_id".to_string(), "amount".to_string()],
+            example: "Transaction txn_001 completed successfully with amount 100".to_string(),
+        });
+
+        matcher.add_template(LogTemplate {
+            template_id: 31,
+            pattern: r"Transaction ([a-zA-Z0-9_]+) completed with warnings: (.*)".to_string(),
+            variables: vec!["txn_id".to_string(), "warnings".to_string()],
+            example: "Transaction txn_002 completed with warnings: low balance".to_string(),
+        });
+
+        matcher.add_template(LogTemplate {
+            template_id: 32,
+            pattern: r"Transaction ([a-zA-Z0-9_]+) failed due to (.*)".to_string(),
+            variables: vec!["txn_id".to_string(), "reason".to_string()],
+            example: "Transaction txn_003 failed due to insufficient funds".to_string(),
+        });
+
+        // Each should match the correct template based on distinctive fragments
+        assert_eq!(
+            matcher.match_log("Transaction txn_001 completed successfully with amount 100"),
+            Some(30)
+        );
+
+        assert_eq!(
+            matcher.match_log("Transaction txn_002 completed with warnings: low balance"),
+            Some(31)
+        );
+
+        assert_eq!(
+            matcher.match_log("Transaction txn_003 failed due to insufficient funds"),
+            Some(32)
+        );
+    }
+
+    #[test]
+    fn test_all_fragments_required() {
+        let mut matcher = LogMatcher::new();
+
+        // Pattern with multiple distinct fragments
+        matcher.add_template(LogTemplate {
+            template_id: 40,
+            pattern: r"User (\d+) logged in from (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) at (.*)"
+                .to_string(),
+            variables: vec![
+                "user_id".to_string(),
+                "ip".to_string(),
+                "timestamp".to_string(),
+            ],
+            example: "User 12345 logged in from 192.168.1.1 at 2025-01-15T10:30:45Z".to_string(),
+        });
+
+        // Should match when all fragments are present
+        assert_eq!(
+            matcher.match_log("User 12345 logged in from 192.168.1.1 at 2025-01-15T10:30:45Z"),
+            Some(40)
+        );
+
+        // Should NOT match if any fragment is missing
+        assert_eq!(
+            matcher.match_log("User 12345 from 192.168.1.1 at 2025-01-15T10:30:45Z"),
+            None
+        );
+
+        assert_eq!(
+            matcher.match_log("User 12345 logged in from 192.168.1.1"),
+            None
+        );
     }
 }

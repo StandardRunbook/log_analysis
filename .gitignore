@@ -1,6 +1,46 @@
+# Rust build artifacts
 /target
+Cargo.lock
 
 # Environment variables
 .env
 .env.local
 .env.*.local
+
+# Build outputs
+/dist
+
+# Cache directory (generated templates)
+/cache/*.bin
+/cache/*.json
+
+# Datasets (large files - DO NOT COMMIT)
+/data/loghub/
+/data/openstack/
+# Keep directory structure but ignore all contents
+!/data/loghub/.gitkeep
+!/data/openstack/.gitkeep
+
+# Benchmark results
+/benchmark_results/*.txt
+/benchmark_results/*.json
+
+# Temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Log files (output from benchmarks and test runs)
+*.log
+
+# Shell scripts (temporary automation)
+*.sh
+
+# IDE
+.idea
+.vscode
+*.iml
+
+# Test binaries
+test_ac

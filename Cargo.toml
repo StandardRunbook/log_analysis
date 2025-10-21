@@ -3,6 +3,14 @@ name = "log_analyzer"
 version = "0.1.0"
 edition = "2021"
 
+#[[bin]]
+#name = "log-analyzer-backend"
+#path = "src/main.rs"
+
+#[[bin]]
+#name = "log-analyzer-mock"
+#path = "src/mock_main.rs"
+
 [dependencies]
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
@@ -17,6 +25,7 @@ reqwest = { version = "0.12", features = ["json"] }
 radix_trie = "0.2"
 regex = "1.10"
 anyhow = "1.0"
+dotenvy = "0.15"
 
 # ClickHouse client
 clickhouse = "0.12"
@@ -44,3 +53,26 @@ aho-corasick = "1.1"  # Multi-pattern DFA matching
 
 # Zero-copy and arena allocation
 bumpalo = "3.14"  # Fast bump allocator (arena)
+typed-arena = "2.0"  # Typed arena allocator
+
+# High-performance hash maps
+rustc-hash = "1.1"  # FxHashMap - faster than std HashMap
+ahash = "0.8"  # Fast, DoS-resistant hashing
+
+# Zero-copy and small-size optimizations
+smallvec = "1.11"  # Stack-allocated vectors for small collections
+arrayvec = "0.7"  # Fixed-capacity Vec alternative
+
+# Async trait support for dependency injection
+async-trait = "0.1"
+
+# Efficient binary serialization
+bincode = "1.3"
+
+# Random number generation for train/test split
+rand = "0.8"
+
+# CSV parsing for LogHub datasets
+csv = "1.3"
+
+once_cell = "1.19"
