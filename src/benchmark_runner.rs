@@ -243,6 +243,11 @@ where
         println!("⚡ Throughput Benchmark");
         println!("   Generator: {}", generator.name());
         println!("   Matcher:   {}", matcher.name());
+        if config.use_batch {
+            println!("   Mode:      Batch processing");
+        } else {
+            println!("   Mode:      Sequential processing");
+        }
         println!("{}\n", "=".repeat(80));
     }
 
@@ -256,17 +261,43 @@ where
     let start = Instant::now();
     let mut templates_generated = 0;
 
-    for (idx, log_line) in test_logs.iter().enumerate() {
-        if config.verbose && idx % 100 == 0 && idx > 0 {
-            println!("   Processed {}/{} logs...", idx, test_logs.len());
+    if config.use_batch {
+        // Batch processing mode - process in chunks
+        let batch_size = 1000; // Process 1000 logs at a time
+        for chunk_start in (0..test_logs.len()).step_by(batch_size) {
+            let chunk_end = (chunk_start + batch_size).min(test_logs.len());
+            let chunk = &test_logs[chunk_start..chunk_end];
+
+            if config.verbose && chunk_start % 5000 == 0 && chunk_start > 0 {
+                println!("   Processed {}/{} logs...", chunk_start, test_logs.len());
+            }
+
+            let log_refs: Vec<&str> = chunk.iter().map(|s| s.as_str()).collect();
+            let match_results = matcher.match_batch(&log_refs);
+
+            for (idx, match_result) in match_results.iter().enumerate() {
+                if match_result.is_none() {
+                    if let Ok(new_template) = generator.generate_template(chunk[idx].as_str()).await {
+                        matcher.add_template(new_template);
+                        templates_generated += 1;
+                    }
+                }
+            }
         }
+    } else {
+        // Sequential processing mode
+        for (idx, log_line) in test_logs.iter().enumerate() {
+            if config.verbose && idx % 100 == 0 && idx > 0 {
+                println!("   Processed {}/{} logs...", idx, test_logs.len());
+            }
 
-        let match_result = matcher.match_log(log_line);
+            let match_result = matcher.match_log(log_line);
 
-        if match_result.is_none() {
-            if let Ok(new_template) = generator.generate_template(log_line).await {
-                matcher.add_template(new_template);
-                templates_generated += 1;
+            if match_result.is_none() {
+                if let Ok(new_template) = generator.generate_template(log_line).await {
+                    matcher.add_template(new_template);
+                    templates_generated += 1;
+                }
             }
         }
     }

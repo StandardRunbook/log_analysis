@@ -85,6 +85,20 @@ pub trait LogMatcherTrait: Send + Sync {
         log_lines.iter().map(|line| self.match_log(line)).collect()
     }
 
+    /// Match multiple log lines in parallel (multi-threaded batch processing)
+    ///
+    /// Uses rayon for parallel processing with per-thread scratch buffers.
+    /// Best for large batches (>1000 logs) on multi-core systems.
+    ///
+    /// Default implementation uses rayon's parallel iterator.
+    fn match_batch_parallel(&self, log_lines: &[&str]) -> Vec<Option<u64>> {
+        use rayon::prelude::*;
+        log_lines
+            .par_iter()
+            .map(|line| self.match_log(line))
+            .collect()
+    }
+
     /// Get all templates currently in the matcher
     fn get_all_templates(&self) -> Vec<LogTemplate>;
 

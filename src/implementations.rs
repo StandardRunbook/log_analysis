@@ -41,6 +41,8 @@ impl TemplateGenerator for LLMTemplateGenerator {
     }
 }
 
+/// Optimized log matcher with zero-copy optimizations
+/// Uses LogMatcher internally with SmallVec, thread-local scratch buffers, and inline hints
 pub struct RegexLogMatcher {
     matcher: LogMatcher,
 }
@@ -72,12 +74,16 @@ impl LogMatcherTrait for RegexLogMatcher {
         self.matcher.match_batch(log_lines)
     }
 
+    fn match_batch_parallel(&self, log_lines: &[&str]) -> Vec<Option<u64>> {
+        self.matcher.match_batch_parallel(log_lines)
+    }
+
     fn get_all_templates(&self) -> Vec<LogTemplate> {
         self.matcher.get_all_templates()
     }
 
     fn name(&self) -> &str {
-        "RegexMatcher"
+        "OptimizedMatcher"
     }
 }
 

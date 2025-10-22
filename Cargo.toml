@@ -3,13 +3,9 @@ name = "log_analyzer"
 version = "0.1.0"
 edition = "2021"
 
-#[[bin]]
-#name = "log-analyzer-backend"
-#path = "src/main.rs"
-
-#[[bin]]
-#name = "log-analyzer-mock"
-#path = "src/mock_main.rs"
+[[bin]]
+name = "log-ingest-service"
+path = "src/bin/log-ingest-service.rs"
 
 [dependencies]
 axum = "0.7"
@@ -76,3 +72,9 @@ rand = "0.8"
 csv = "1.3"
 
 once_cell = "1.19"
+
+# OpenTelemetry for log ingestion
+opentelemetry = "0.22"
+opentelemetry-otlp = "0.15"
+opentelemetry_sdk = { version = "0.22", features = ["logs", "rt-tokio"] }
+opentelemetry-proto = "0.5"

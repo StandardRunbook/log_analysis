@@ -2,9 +2,8 @@
 pub mod llm_service;
 pub mod log_format_detector;
 pub mod log_matcher;
-pub mod log_matcher_fast; // Optimized matcher with FxHashMap
-pub mod log_matcher_zero_copy; // Zero-copy matcher with thread-local buffers
 pub mod matcher_config;
+pub mod clickhouse_client;
 
 // Dependency injection framework for benchmarking
 pub mod benchmark_runner;
