@@ -207,11 +207,7 @@ impl MatcherSnapshot {
             for (template_id, matched_count, required_count) in &scratch.candidates {
                 let match_ratio = *matched_count as f64 / (*required_count).max(1) as f64;
                 if match_ratio >= self.config.fragment_match_threshold {
-                    if let Some(regex) = self.patterns.get(template_id) {
-                        if regex.is_match(log_line) {
-                            return Some(*template_id);
-                        }
-                    }
+                    return Some(*template_id);
                 }
             }
 
