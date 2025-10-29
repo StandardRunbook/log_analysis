@@ -1,0 +1,44 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Git
+.git/
+.github/
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Benchmark and test data
+benchmark_results/
+data/
+dist/
+tests/
+
+# Scripts
+scripts/
+
+# Cache directories (rebuild in container if needed)
+cache/
+
+# Environment files (will be set via env vars)
+.env
+.env.*
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.claude/
+
+# Logs
+*.log
+
+# Examples (not needed in production)
+examples/

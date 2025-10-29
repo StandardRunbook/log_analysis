@@ -1,0 +1,28 @@
+spec: v0.6
+
+runtime: base:latest
+
+rootfs: ./Dockerfile
+
+cmd: ["/usr/local/bin/log-ingest-service"]
+
+# Service configuration
+services:
+  - port: 3002:3002/http
+
+# Resource allocation for KraftCloud free tier (4GB RAM total)
+# Note: KraftCloud currently limits instances to 1 vCPU
+# Allocating 2GB for this service, leaving headroom for other services
+memory: 2G
+
+# Environment variables
+env:
+  RUST_LOG: info
+  INGEST_PORT: "3002"
+  CLICKHOUSE_URL: "${CLICKHOUSE_URL:-http://clickhouse:8123}"
+
+# Volumes for persistent data (optional)
+volumes:
+  - name: cache
+    source: /app/cache
+    destination: /app/cache
