@@ -112,13 +112,6 @@ cargo test --release --test benchmarks throughput -- --nocapture
 cargo test --release --test benchmarks parallel -- --nocapture
 ```
 
-**Expected results:**
-```
-Overall throughput:    84,441 logs/sec 🚀
-Avg dataset throughput:156,025 logs/sec
-Avg accuracy:          98.46%
-```
-
 ## 🏗️ Architecture
 
 ### Core Components
