@@ -36,7 +36,7 @@ curl http://localhost:3000/health
 - Lock-free concurrent matching
 - Auto-scales with CPU cores
 
-✅ **Advanced Algorithms**
+✅ **Algorithms**
 - Aho-Corasick multi-pattern DFA
 - FxHashMap for fast hashing
 - Persistent data structures (copy-on-write)
