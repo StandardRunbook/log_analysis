@@ -15,10 +15,10 @@ curl http://localhost:3000/health
 
 ## ⚡ Performance
 
-- **Peak throughput:** 374,000 logs/sec (single dataset)
-- **Average throughput:** 164,000 logs/sec (across 16 datasets)
-- **Latency:** 2.7-44 μs per log
-- **Accuracy:** 98.46% average grouping accuracy
+- **Average throughput:** 370,000 logs/sec
+- **Peak throughput:** 876,000 logs/sec (Spark logs)
+- **Latency:** 1.1-21.7 μs per log
+- **Accuracy:** 99.86% average grouping accuracy
 
 ### Optimization Features
 
