@@ -416,7 +416,7 @@ async fn ingest_log(
         state.writer.write(log_entry.clone()).await;
 
         // Sample logs for template_examples (1% sampling + all errors)
-        if let Some(tid) = template_id {
+        if let Some(_tid) = template_id {
             let should_sample =
                 log_entry.level == "ERROR" ||  // Always sample errors
                 rand::random::<f64>() < 0.01;   // 1% sample rate for others
