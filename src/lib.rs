@@ -4,6 +4,7 @@ pub mod log_format_detector;
 pub mod log_matcher;
 pub mod matcher_config;
 pub mod clickhouse_client;
+pub mod buffered_writer;
 
 // Dependency injection framework for benchmarking
 pub mod benchmark_runner;

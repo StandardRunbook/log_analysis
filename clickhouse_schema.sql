@@ -1,74 +1,47 @@
 -- ClickHouse Schema for Log Analysis Service
--- This schema stores logs with their matched templates for efficient querying
+-- Two-table design optimized for KL divergence and anomaly detection
 
--- Main logs table
+-- Table 1: Logs for histogram/KL divergence queries
+-- Ordered by (org, dashboard, panel, metric, time) for fast range queries
 CREATE TABLE IF NOT EXISTS logs (
-    timestamp DateTime64(3) CODEC(DoubleDelta, LZ4),
+    timestamp DateTime CODEC(DoubleDelta, LZ4),
     org String CODEC(LZ4),
     dashboard String CODEC(LZ4),
+    panel_name String CODEC(LZ4),
+    metric_name String CODEC(LZ4),
     service String CODEC(LZ4),
     host String CODEC(LZ4),
     level String CODEC(LZ4),
     message String CODEC(LZ4),
     template_id Nullable(UInt64) CODEC(LZ4),
     template_pattern Nullable(String) CODEC(LZ4),
-
-    -- Metadata (flexible JSON for customer data)
-    metadata String DEFAULT '{}' CODEC(LZ4),
-
-    -- Ingestion metadata
-    ingested_at DateTime DEFAULT now() CODEC(DoubleDelta, LZ4)
+    metadata String CODEC(LZ4)
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(timestamp)
-ORDER BY (org, timestamp, template_id)
+ORDER BY (org, dashboard, panel_name, metric_name, timestamp)
 TTL timestamp + INTERVAL 30 DAY  -- Keep logs for 30 days
 SETTINGS index_granularity = 8192;
 
--- Templates table (for reference)
-CREATE TABLE IF NOT EXISTS templates (
+-- Table 2: Template examples for showing representative logs to users
+-- Ordered by (template_id first) for fast lookup when showing anomaly context
+CREATE TABLE IF NOT EXISTS template_examples (
     template_id UInt64,
-    pattern String,
-    variables Array(String),
-    example String,
-    created_at DateTime DEFAULT now()
-)
-ENGINE = ReplacingMergeTree(created_at)
-ORDER BY template_id
-SETTINGS index_granularity = 8192;
-
--- Materialized view for fast template grouping
-CREATE MATERIALIZED VIEW IF NOT EXISTS logs_by_template_hourly
-ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMMDD(hour)
-ORDER BY (org, dashboard, hour, template_id)
-AS SELECT
-    org,
-    dashboard,
-    toStartOfHour(timestamp) as hour,
-    template_id,
-    count() as log_count,
-    min(timestamp) as first_seen,
-    max(timestamp) as last_seen,
-    groupArray(5)(message) as sample_messages  -- Keep 5 sample messages
-FROM logs
-GROUP BY org, dashboard, hour, template_id;
-
--- Index for fast Grafana queries
-CREATE TABLE IF NOT EXISTS log_summary (
     org String,
     dashboard String,
-    panel_title String,
+    panel_name String,
     metric_name String,
-    hour DateTime,
-    template_id UInt64,
-    log_count UInt64,
-    sample_messages Array(String),
-    first_timestamp DateTime,
-    last_timestamp DateTime
+    timestamp DateTime,
+    service String,
+    host String,
+    level String,
+    message String,
+    template_pattern String,
+    metadata String,
+    added_at DateTime DEFAULT now()
 )
-ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMMDD(hour)
-ORDER BY (org, dashboard, panel_title, metric_name, hour, template_id)
-TTL hour + INTERVAL 7 DAY  -- Keep summaries for 7 days
+ENGINE = ReplacingMergeTree(added_at)
+PARTITION BY template_id
+ORDER BY (template_id, org, dashboard, panel_name, metric_name, timestamp)
+TTL added_at + INTERVAL 7 DAY  -- Keep examples for 7 days
 SETTINGS index_granularity = 8192;
