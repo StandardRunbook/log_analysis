@@ -43,6 +43,7 @@ const LLM_INITIAL_BACKOFF_MS: u64 = 1000;
 struct AppState {
     matcher: Arc<LogMatcher>,
     writer: Arc<BufferedClickHouseWriter>,
+    clickhouse: Arc<ClickHouseClient>,
     unmatched_tx: mpsc::UnboundedSender<String>,
 }
 
@@ -106,6 +107,7 @@ impl AppState {
         Ok(Self {
             matcher,
             writer,
+            clickhouse,
             unmatched_tx,
         })
     }
@@ -410,8 +412,25 @@ async fn ingest_log(
             metadata: log_req.metadata.to_string(),
         };
 
-        // Write to buffered writer
-        state.writer.write(log_entry).await;
+        // Write to buffered writer (logs table)
+        state.writer.write(log_entry.clone()).await;
+
+        // Sample logs for template_examples (1% sampling + all errors)
+        if let Some(tid) = template_id {
+            let should_sample =
+                log_entry.level == "ERROR" ||  // Always sample errors
+                rand::random::<f64>() < 0.01;   // 1% sample rate for others
+
+            if should_sample {
+                let clickhouse = state.clickhouse.clone();
+                let example = log_entry.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = clickhouse.insert_template_example(&example).await {
+                        debug!("Failed to insert template example: {}", e);
+                    }
+                });
+            }
+        }
     }
 
     info!("Successfully ingested {} log(s) ({} matched)", log_count, matched_count);

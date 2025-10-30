@@ -25,6 +25,7 @@ SETTINGS index_granularity = 8192;
 
 -- Table 2: Template examples for showing representative logs to users
 -- Ordered by (template_id first) for fast lookup when showing anomaly context
+-- Examples rotate every hour to keep them fresh
 CREATE TABLE IF NOT EXISTS template_examples (
     template_id UInt64,
     org String,
@@ -43,5 +44,5 @@ CREATE TABLE IF NOT EXISTS template_examples (
 ENGINE = ReplacingMergeTree(added_at)
 PARTITION BY template_id
 ORDER BY (template_id, org, dashboard, panel_name, metric_name, timestamp)
-TTL added_at + INTERVAL 7 DAY  -- Keep examples for 7 days
+TTL added_at + INTERVAL 1 HOUR  -- Keep examples for 1 hour, then rotate
 SETTINGS index_granularity = 8192;
