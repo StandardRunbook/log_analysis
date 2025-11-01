@@ -9,18 +9,14 @@ use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Deserialize, clickhouse::Row)]
 pub struct LogEntry {
-    pub timestamp: DateTime<Utc>,
-    pub org: String,
-    pub dashboard: String,
-    pub panel_name: String,
-    pub metric_name: String,
+    pub org_id: String,
+    pub log_stream_id: String,
     pub service: String,
-    pub host: String,
-    pub level: String,
+    pub region: String,
+    pub log_stream_name: String,
+    pub timestamp: DateTime<Utc>,
+    pub template_id: String,
     pub message: String,
-    pub template_id: Option<u64>,
-    pub template_pattern: Option<String>,
-    pub metadata: String,
 }
 
 // Custom serialization for ClickHouse JSON format
@@ -30,21 +26,17 @@ impl Serialize for LogEntry {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("LogEntry", 12)?;
-        // Format timestamp as "YYYY-MM-DD HH:MM:SS" for ClickHouse
-        let ts_str = self.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
-        state.serialize_field("timestamp", &ts_str)?;
-        state.serialize_field("org", &self.org)?;
-        state.serialize_field("dashboard", &self.dashboard)?;
-        state.serialize_field("panel_name", &self.panel_name)?;
-        state.serialize_field("metric_name", &self.metric_name)?;
+        let mut state = serializer.serialize_struct("LogEntry", 8)?;
+        state.serialize_field("org_id", &self.org_id)?;
+        state.serialize_field("log_stream_id", &self.log_stream_id)?;
         state.serialize_field("service", &self.service)?;
-        state.serialize_field("host", &self.host)?;
-        state.serialize_field("level", &self.level)?;
-        state.serialize_field("message", &self.message)?;
+        state.serialize_field("region", &self.region)?;
+        state.serialize_field("log_stream_name", &self.log_stream_name)?;
+        // Format timestamp with milliseconds for DateTime64(3)
+        let ts_str = self.timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        state.serialize_field("timestamp", &ts_str)?;
         state.serialize_field("template_id", &self.template_id)?;
-        state.serialize_field("template_pattern", &self.template_pattern)?;
-        state.serialize_field("metadata", &self.metadata)?;
+        state.serialize_field("message", &self.message)?;
         state.end()
     }
 }
@@ -86,7 +78,7 @@ impl ClickHouseClient {
 
     /// Initialize database schema
     pub async fn init_schema(&self) -> Result<()> {
-        let schema = include_str!("../clickhouse_schema.sql");
+        let schema = include_str!("../hover-schema/clickhouse_schema.sql");
 
         // Split by semicolon and execute each statement
         for statement in schema.split(';') {
@@ -101,9 +93,22 @@ impl ClickHouseClient {
 
     /// Insert a single log entry
     pub async fn insert_log(&self, log: LogEntry) -> Result<()> {
-        let mut insert = self.client.insert("logs")?;
-        insert.write(&log).await?;
-        insert.end().await?;
+        // Use JSON format for consistency
+        let json_line = serde_json::to_string(&log)?;
+
+        let http_client = reqwest::Client::new();
+        let response = http_client
+            .post(&self.url)
+            .query(&[("query", "INSERT INTO logs FORMAT JSONEachRow")])
+            .body(json_line)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            anyhow::bail!("ClickHouse insert failed: {}", error_text);
+        }
+
         Ok(())
     }
 
@@ -138,25 +143,32 @@ impl ClickHouseClient {
     /// Query logs for a time range
     pub async fn query_logs(
         &self,
-        org: &str,
+        org_id: &str,
+        log_stream_id: &str,
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
     ) -> Result<Vec<LogEntry>> {
+        // Format timestamps for DateTime64(3) - need to use parseDateTime64BestEffort or format as string
+        let start_str = start_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let end_str = end_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+
         let logs = self.client
             .query("
                 SELECT
-                    timestamp, org, dashboard, service, host, level,
-                    message, template_id, template_pattern, metadata
+                    org_id, log_stream_id, service, region, log_stream_name,
+                    timestamp, template_id, message
                 FROM logs
-                WHERE org = ?
-                  AND timestamp >= ?
-                  AND timestamp <= ?
+                WHERE org_id = ?
+                  AND log_stream_id = ?
+                  AND timestamp >= parseDateTime64BestEffort(?)
+                  AND timestamp <= parseDateTime64BestEffort(?)
                 ORDER BY timestamp DESC
                 LIMIT 10000
             ")
-            .bind(org)
-            .bind(start_time)
-            .bind(end_time)
+            .bind(org_id)
+            .bind(log_stream_id)
+            .bind(start_str)
+            .bind(end_str)
             .fetch_all::<LogEntry>()
             .await?;
 
@@ -166,17 +178,20 @@ impl ClickHouseClient {
     /// Query logs grouped by template
     pub async fn query_logs_grouped(
         &self,
-        org: &str,
-        dashboard: &str,
+        org_id: &str,
+        log_stream_id: &str,
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
     ) -> Result<Vec<LogGroup>> {
         #[derive(Debug, clickhouse::Row, Deserialize)]
         struct GroupRow {
-            template_id: Option<u64>,
+            template_id: String,
             log_count: u64,
             sample_messages: Vec<String>,
         }
+
+        let start_str = start_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let end_str = end_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
         let groups = self.client
             .query("
@@ -185,18 +200,18 @@ impl ClickHouseClient {
                     count() as log_count,
                     groupArray(5)(message) as sample_messages
                 FROM logs
-                WHERE org = ?
-                  AND dashboard = ?
-                  AND timestamp >= ?
-                  AND timestamp <= ?
+                WHERE org_id = ?
+                  AND log_stream_id = ?
+                  AND timestamp >= parseDateTime64BestEffort(?)
+                  AND timestamp <= parseDateTime64BestEffort(?)
                 GROUP BY template_id
                 ORDER BY log_count DESC
                 LIMIT 20
             ")
-            .bind(org)
-            .bind(dashboard)
-            .bind(start_time)
-            .bind(end_time)
+            .bind(org_id)
+            .bind(log_stream_id)
+            .bind(start_str)
+            .bind(end_str)
             .fetch_all::<GroupRow>()
             .await?;
 
@@ -228,11 +243,32 @@ impl ClickHouseClient {
 
     /// Insert a template example
     pub async fn insert_template_example(&self, log: &LogEntry) -> Result<()> {
-        if log.template_id.is_none() {
+        if log.template_id.is_empty() {
             return Ok(()); // Skip logs without templates
         }
 
-        let json_line = serde_json::to_string(log)?;
+        #[derive(Serialize)]
+        struct TemplateExample {
+            org_id: String,
+            log_stream_id: String,
+            service: String,
+            region: String,
+            template_id: String,
+            message: String,
+            timestamp: String,
+        }
+
+        let example = TemplateExample {
+            org_id: log.org_id.clone(),
+            log_stream_id: log.log_stream_id.clone(),
+            service: log.service.clone(),
+            region: log.region.clone(),
+            template_id: log.template_id.clone(),
+            message: log.message.clone(),
+            timestamp: log.timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+        };
+
+        let json_line = serde_json::to_string(&example)?;
 
         let http_client = reqwest::Client::new();
         let response = http_client
@@ -253,25 +289,21 @@ impl ClickHouseClient {
     /// Get example logs for a template
     pub async fn get_template_examples(
         &self,
-        template_id: u64,
-        org: &str,
-        dashboard: &str,
-        panel_name: &str,
-        metric_name: &str,
+        org_id: &str,
+        log_stream_id: &str,
+        template_id: &str,
         limit: usize,
     ) -> Result<Vec<LogEntry>> {
         let query = format!(
-            "SELECT timestamp, org, dashboard, panel_name, metric_name, service, host, level, message, {}, template_pattern, metadata
+            "SELECT org_id, log_stream_id, service, region, template_id, message, timestamp
              FROM template_examples
-             WHERE template_id = {}
-               AND org = '{}'
-               AND dashboard = '{}'
-               AND panel_name = '{}'
-               AND metric_name = '{}'
+             WHERE org_id = '{}'
+               AND log_stream_id = '{}'
+               AND template_id = '{}'
              ORDER BY timestamp DESC
              LIMIT {}
              FORMAT JSONEachRow",
-            template_id, template_id, org, dashboard, panel_name, metric_name, limit
+            org_id, log_stream_id, template_id, limit
         );
 
         let http_client = reqwest::Client::new();
@@ -282,9 +314,35 @@ impl ClickHouseClient {
             .await?;
 
         let body = response.text().await?;
+
+        #[derive(Deserialize)]
+        struct TemplateExampleRow {
+            org_id: String,
+            log_stream_id: String,
+            service: String,
+            region: String,
+            template_id: String,
+            message: String,
+            timestamp: String,
+        }
+
         let examples: Vec<LogEntry> = body
             .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
+            .filter_map(|line| {
+                let row: TemplateExampleRow = serde_json::from_str(line).ok()?;
+                Some(LogEntry {
+                    org_id: row.org_id,
+                    log_stream_id: row.log_stream_id,
+                    service: row.service,
+                    region: row.region,
+                    log_stream_name: String::new(), // Not stored in template_examples
+                    timestamp: DateTime::parse_from_str(&row.timestamp, "%Y-%m-%d %H:%M:%S%.3f")
+                        .ok()?
+                        .with_timezone(&Utc),
+                    template_id: row.template_id,
+                    message: row.message,
+                })
+            })
             .collect();
 
         Ok(examples)
@@ -293,7 +351,7 @@ impl ClickHouseClient {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LogGroup {
-    pub template_id: Option<u64>,
+    pub template_id: String,
     pub log_count: u64,
     pub sample_messages: Vec<String>,
     pub relative_change: f64,
@@ -316,22 +374,20 @@ mod tests {
         let client = ClickHouseClient::new("http://localhost:8123").unwrap();
 
         let log = LogEntry {
+            org_id: "org-1".to_string(),
+            log_stream_id: "stream-1".to_string(),
+            service: "api-server".to_string(),
+            region: "us-east-1".to_string(),
+            log_stream_name: "/aws/api/production".to_string(),
             timestamp: Utc::now(),
-            org: "1".to_string(),
-            dashboard: "test".to_string(),
-            service: "api".to_string(),
-            host: "server-01".to_string(),
-            level: "ERROR".to_string(),
-            message: "Test error".to_string(),
-            template_id: Some(1),
-            template_pattern: Some("Test.*".to_string()),
-            metadata: "{}".to_string(),
+            template_id: "template-1".to_string(),
+            message: "Test error message".to_string(),
         };
 
         client.insert_log(log.clone()).await.unwrap();
 
         let logs = client
-            .query_logs("1", Utc::now() - chrono::Duration::hours(1), Utc::now())
+            .query_logs("org-1", "stream-1", Utc::now() - chrono::Duration::hours(1), Utc::now())
             .await
             .unwrap();
 

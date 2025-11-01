@@ -1,0 +1,3 @@
+[submodule "hover-schema"]
+	path = hover-schema
+	url = https://github.com/StandardRunbook/hover-schema.git

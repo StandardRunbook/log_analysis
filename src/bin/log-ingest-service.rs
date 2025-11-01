@@ -270,16 +270,12 @@ fn spawn_batch_processor(
 #[derive(Debug, Deserialize)]
 struct IngestRequest {
     timestamp: Option<String>,
-    org: String,
-    dashboard: Option<String>,
-    panel_name: Option<String>,
-    metric_name: Option<String>,
-    service: Option<String>,
-    host: Option<String>,
-    level: Option<String>,
+    org_id: String,
+    log_stream_id: String,
+    service: String,
+    region: String,
+    log_stream_name: String,
     message: String,
-    #[serde(default)]
-    metadata: serde_json::Value,
 }
 
 /// Unified request structure - accepts single log or batch
@@ -365,7 +361,7 @@ async fn ingest_log(
     };
 
     // Get all templates once for pattern lookup
-    let templates = state.matcher.get_all_templates();
+    let _templates = state.matcher.get_all_templates();
 
     // Build log entries and queue unmatched for LLM
     let mut matched_count = 0;
@@ -390,36 +386,27 @@ async fn ingest_log(
             matched_count += 1;
         }
 
-        let template_pattern = template_id.and_then(|tid| {
-            templates
-                .iter()
-                .find(|t| t.template_id == tid)
-                .map(|t| t.pattern.clone())
-        });
+        let template_id_str = template_id
+            .map(|tid| tid.to_string())
+            .unwrap_or_default();
 
         let log_entry = LogEntry {
+            org_id: log_req.org_id.clone(),
+            log_stream_id: log_req.log_stream_id.clone(),
+            service: log_req.service.clone(),
+            region: log_req.region.clone(),
+            log_stream_name: log_req.log_stream_name.clone(),
             timestamp,
-            org: log_req.org.clone(),
-            dashboard: log_req.dashboard.clone().unwrap_or_default(),
-            panel_name: log_req.panel_name.clone().unwrap_or_default(),
-            metric_name: log_req.metric_name.clone().unwrap_or_default(),
-            service: log_req.service.clone().unwrap_or_default(),
-            host: log_req.host.clone().unwrap_or_default(),
-            level: log_req.level.clone().unwrap_or_else(|| "INFO".to_string()),
+            template_id: template_id_str,
             message: log_req.message.clone(),
-            template_id,
-            template_pattern,
-            metadata: log_req.metadata.to_string(),
         };
 
         // Write to buffered writer (logs table)
         state.writer.write(log_entry.clone()).await;
 
-        // Sample logs for template_examples (1% sampling + all errors)
-        if let Some(_tid) = template_id {
-            let should_sample =
-                log_entry.level == "ERROR" ||  // Always sample errors
-                rand::random::<f64>() < 0.01;   // 1% sample rate for others
+        // Sample logs for template_examples (1% sampling)
+        if !log_entry.template_id.is_empty() {
+            let should_sample = rand::random::<f64>() < 0.01;   // 1% sample rate
 
             if should_sample {
                 let clickhouse = state.clickhouse.clone();
