@@ -23,7 +23,20 @@ ORDER BY (org, dashboard, panel_name, metric_name, timestamp)
 TTL timestamp + INTERVAL 30 DAY  -- Keep logs for 30 days
 SETTINGS index_granularity = 8192;
 
--- Table 2: Template examples for showing representative logs to users
+-- Table 2: Templates master table
+-- Stores all learned templates with their patterns and metadata
+CREATE TABLE IF NOT EXISTS templates (
+    template_id UInt64,
+    pattern String,
+    variables Array(String),
+    example String,
+    created_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(created_at)
+ORDER BY template_id
+SETTINGS index_granularity = 8192;
+
+-- Table 3: Template examples for showing representative logs to users
 -- Ordered by (template_id first) for fast lookup when showing anomaly context
 -- Examples rotate every hour to keep them fresh
 CREATE TABLE IF NOT EXISTS template_examples (
