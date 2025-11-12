@@ -1,0 +1,30 @@
+{
+  "providers": [
+    {
+      "name": "ollama-llama3",
+      "provider": "ollama",
+      "model": "llama3",
+      "api_key": null,
+      "endpoint": "http://localhost:11434",
+      "timeout_secs": 60
+    },
+    {
+      "name": "openai-gpt4",
+      "provider": "openai",
+      "model": "gpt-4",
+      "api_key": "sk-your-openai-key-here",
+      "endpoint": null,
+      "timeout_secs": 60
+    },
+    {
+      "name": "anthropic-claude",
+      "provider": "anthropic",
+      "model": "claude-3-sonnet-20240229",
+      "api_key": "sk-ant-your-anthropic-key-here",
+      "endpoint": null,
+      "timeout_secs": 60
+    }
+  ],
+  "consensus_strategy": "majority",
+  "min_agreement": 2
+}

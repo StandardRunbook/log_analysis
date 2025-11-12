@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 use log_analyzer::buffered_writer::BufferedClickHouseWriter;
 use log_analyzer::clickhouse_client::{ClickHouseClient, LogEntry};
 use log_analyzer::llm_service::LLMServiceClient;
+use log_analyzer::llm_config::MultiLLMConfig;
 use log_analyzer::log_matcher::{LogMatcher, LogTemplate};
 use log_analyzer::matcher_config::MatcherConfig;
 use serde::{Deserialize, Serialize};
@@ -48,7 +49,7 @@ struct AppState {
 }
 
 impl AppState {
-    async fn new(clickhouse_url: &str, llm_provider: String, llm_api_key: String, llm_model: String) -> anyhow::Result<Self> {
+    async fn new(clickhouse_url: &str) -> anyhow::Result<Self> {
         // Initialize ClickHouse
         let clickhouse = Arc::new(ClickHouseClient::new(clickhouse_url)?);
         clickhouse.init_schema().await?;
@@ -91,8 +92,9 @@ impl AppState {
             }
         }
 
-        // Initialize LLM service
-        let llm_client = Arc::new(LLMServiceClient::new(llm_provider, llm_api_key, llm_model));
+        // Initialize LLM service with multi-LLM configuration
+        let llm_config = MultiLLMConfig::from_env();
+        let llm_client = Arc::new(LLMServiceClient::new_with_config(llm_config)?);
 
         // Create channel for unmatched logs
         let (unmatched_tx, unmatched_rx) = mpsc::unbounded_channel();
@@ -460,18 +462,11 @@ async fn main() -> anyhow::Result<()> {
     // Get configuration from environment
     let clickhouse_url = std::env::var("CLICKHOUSE_URL")
         .unwrap_or_else(|_| "http://localhost:8123".to_string());
-    let llm_provider = std::env::var("LLM_PROVIDER")
-        .unwrap_or_else(|_| "ollama".to_string());
-    let llm_api_key = std::env::var("LLM_API_KEY")
-        .unwrap_or_else(|_| "".to_string());
-    let llm_model = std::env::var("LLM_MODEL")
-        .unwrap_or_else(|_| "llama3".to_string());
 
     info!("Connecting to ClickHouse: {}", clickhouse_url);
-    info!("LLM Provider: {} (model: {})", llm_provider, llm_model);
 
     // Initialize state
-    let state = AppState::new(&clickhouse_url, llm_provider, llm_api_key, llm_model).await?;
+    let state = AppState::new(&clickhouse_url).await?;
 
     info!("Templates loaded: {}", state.matcher.get_all_templates().len());
     info!("Optimal batch size: {}", state.matcher.optimal_batch_size());

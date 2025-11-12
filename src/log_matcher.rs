@@ -70,6 +70,7 @@ struct MatcherSnapshot {
     template_fragments: FxHashMap<u64, SmallFragmentVec>,
     fragment_id_to_string: FxHashMap<u32, String>,
     fragment_string_to_id: FxHashMap<String, u32>,
+    fragment_weights: FxHashMap<u32, f64>,  // Fragment specificity weights
     next_fragment_id: u32,
     patterns: FxHashMap<u64, Arc<Regex>>,
     templates: FxHashMap<u64, Arc<LogTemplate>>,
@@ -88,6 +89,7 @@ impl MatcherSnapshot {
             template_fragments: FxHashMap::default(),
             fragment_id_to_string: FxHashMap::default(),
             fragment_string_to_id: FxHashMap::default(),
+            fragment_weights: FxHashMap::default(),
             next_fragment_id: 0,
             patterns: FxHashMap::default(),
             templates: FxHashMap::default(),
@@ -98,6 +100,11 @@ impl MatcherSnapshot {
     fn add_template(mut self, template: LogTemplate) -> Self {
         let template_id = template.template_id;
         let fragments = extract_fragments(&template.pattern, self.config.min_fragment_length);
+
+        // Note: Path compression not feasible with Aho-Corasick
+        // AC searches for literal strings, but merging fragments includes regex parts
+        // like "(\d+)" which don't appear in actual logs
+        // The weighted scoring already handles generic fragments effectively
 
         if let Ok(regex) = Regex::new(&template.pattern) {
             self.patterns.insert(template_id, Arc::new(regex));
@@ -115,6 +122,11 @@ impl MatcherSnapshot {
                     self.next_fragment_id += 1;
                     self.fragment_string_to_id.insert(frag.clone(), id);
                     self.fragment_id_to_string.insert(id, frag.clone());
+
+                    // Calculate and store fragment weight
+                    let weight = calculate_fragment_weight(frag);
+                    self.fragment_weights.insert(id, weight);
+
                     id
                 };
                 fragment_ids.push(frag_id);
@@ -186,27 +198,70 @@ impl MatcherSnapshot {
                 }
             }
 
-            // Build candidates list (avoid borrowing issues by collecting first)
+            // Build candidates list with weighted scores
             let candidates_data: Vec<_> = scratch.template_matches
                 .iter()
                 .filter_map(|(template_id, matched_fragments)| {
-                    self.template_fragments.get(template_id)
-                        .map(|required| (*template_id, matched_fragments.len(), required.len()))
+                    self.template_fragments.get(template_id).map(|required| {
+                        // Calculate weighted score
+                        let matched_weight: f64 = matched_fragments
+                            .iter()
+                            .filter_map(|frag_id| self.fragment_weights.get(frag_id))
+                            .sum();
+
+                        let total_weight: f64 = required
+                            .iter()
+                            .filter_map(|frag_id| self.fragment_weights.get(frag_id))
+                            .sum();
+
+                        let weighted_score = if total_weight > 0.0 {
+                            matched_weight / total_weight
+                        } else {
+                            // Fallback to simple ratio if no weights
+                            matched_fragments.len() as f64 / required.len().max(1) as f64
+                        };
+
+                        (*template_id, weighted_score, matched_fragments.len(), required.len())
+                    })
                 })
                 .collect();
 
-            scratch.candidates.extend(candidates_data);
+            scratch.candidates.extend(candidates_data.into_iter().map(|(tid, _score, mc, rc)| (tid, mc, rc)));
 
-            scratch.candidates.sort_unstable_by(|a, b| {
-                let a_ratio = a.1 as f64 / a.2.max(1) as f64;
-                let b_ratio = b.1 as f64 / b.2.max(1) as f64;
-                b_ratio.partial_cmp(&a_ratio).unwrap_or(std::cmp::Ordering::Equal)
+            // Sort by weighted score (stored temporarily in closure)
+            let mut scored_candidates: Vec<_> = scratch.template_matches
+                .iter()
+                .filter_map(|(template_id, matched_fragments)| {
+                    self.template_fragments.get(template_id).map(|required| {
+                        let matched_weight: f64 = matched_fragments
+                            .iter()
+                            .filter_map(|frag_id| self.fragment_weights.get(frag_id))
+                            .sum();
+
+                        let total_weight: f64 = required
+                            .iter()
+                            .filter_map(|frag_id| self.fragment_weights.get(frag_id))
+                            .sum();
+
+                        let weighted_score = if total_weight > 0.0 {
+                            matched_weight / total_weight
+                        } else {
+                            matched_fragments.len() as f64 / required.len().max(1) as f64
+                        };
+
+                        (*template_id, weighted_score)
+                    })
+                })
+                .collect();
+
+            scored_candidates.sort_unstable_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
             });
 
-            for (template_id, matched_count, required_count) in &scratch.candidates {
-                let match_ratio = *matched_count as f64 / (*required_count).max(1) as f64;
-                if match_ratio >= self.config.fragment_match_threshold {
-                    return Some(*template_id);
+            // Return best match if score meets threshold
+            for (template_id, score) in scored_candidates {
+                if score >= self.config.fragment_match_threshold {
+                    return Some(template_id);
                 }
             }
 
@@ -216,10 +271,17 @@ impl MatcherSnapshot {
 
     #[inline]
     fn match_batch(&self, log_lines: &[&str]) -> Vec<Option<u64>> {
-        log_lines
-            .iter()
-            .map(|log_line| self.match_log(log_line))
-            .collect()
+        // Process in chunks for better cache locality
+        const CHUNK_SIZE: usize = 64;
+        let mut results = Vec::with_capacity(log_lines.len());
+
+        for chunk in log_lines.chunks(CHUNK_SIZE) {
+            for log_line in chunk {
+                results.push(self.match_log(log_line));
+            }
+        }
+
+        results
     }
 }
 
@@ -299,6 +361,100 @@ fn extract_fragments(pattern: &str, min_length: usize) -> Vec<String> {
     }
 
     fragments.into_iter().filter(|f| f.len() >= min_length).collect()
+}
+
+/// Calculate fragment specificity weight (normalized between 0.0 and 1.0)
+/// Higher weight = more distinctive/specific fragment
+fn calculate_fragment_weight(fragment: &str) -> f64 {
+    let len = fragment.len() as f64;
+
+    // Base score from length (normalized to 0.0-1.0)
+    // Short fragments (<5 chars): low weight
+    // Medium fragments (5-20 chars): scaled linearly
+    // Long fragments (>20 chars): high weight (capped)
+    let length_score = if len < 5.0 {
+        len / 20.0  // 0.0 - 0.25 for very short
+    } else if len < 20.0 {
+        0.25 + ((len - 5.0) / 15.0) * 0.5  // 0.25 - 0.75 for medium
+    } else {
+        0.75 + ((len - 20.0) / 40.0).min(0.25)  // 0.75 - 1.0 for long (cap at 60 chars)
+    };
+
+    // Content quality score (0.0-1.0)
+    let alphanum_count = fragment.chars().filter(|c| c.is_alphanumeric()).count() as f64;
+    let alphanum_ratio = alphanum_count / len.max(1.0);
+    let content_score = alphanum_ratio * 0.8 + 0.2;  // Range: 0.2 (no alphanum) to 1.0 (all alphanum)
+
+    // Generic penalty (0.3 for generic, 1.0 for normal)
+    let generic_penalty = if is_generic_fragment(fragment) {
+        0.3
+    } else {
+        1.0
+    };
+
+    // Distinctive bonus (1.0 for normal, 1.5 for distinctive)
+    let distinctive_bonus = if has_distinctive_markers(fragment) {
+        1.5
+    } else {
+        1.0
+    };
+
+    // Combine all factors and normalize to 0.0-1.0 range
+    let raw_score = length_score * content_score * generic_penalty * distinctive_bonus;
+
+    // Clamp to [0.0, 1.0] range
+    raw_score.min(1.0).max(0.0)
+}
+
+/// Check if fragment is a generic pattern (common across many log types)
+fn is_generic_fragment(fragment: &str) -> bool {
+    let trimmed = fragment.trim();
+
+    // Very short fragments are generic
+    if trimmed.len() < 4 {
+        return true;
+    }
+
+    // Common field names in Linux logs
+    let generic_patterns = [
+        " uid=", " gid=", " pid=", " euid=", " egid=",
+        " tty=", " user=", " host=", " ip=", " port=",
+        "id=", "name=", "type=", "status=", "code=",
+        ": ", " - ", " | ", " / ",
+    ];
+
+    for pattern in &generic_patterns {
+        if trimmed == *pattern || trimmed.len() < 8 && trimmed.contains(pattern) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Check if fragment has distinctive markers (service names, error keywords, etc.)
+fn has_distinctive_markers(fragment: &str) -> bool {
+    let lower = fragment.to_lowercase();
+
+    // Service/daemon names
+    if lower.contains("sshd") || lower.contains("systemd") || lower.contains("kernel")
+        || lower.contains("docker") || lower.contains("nginx") || lower.contains("apache") {
+        return true;
+    }
+
+    // Error/event keywords
+    if lower.contains("authentication") || lower.contains("failure") || lower.contains("error")
+        || lower.contains("warning") || lower.contains("critical") || lower.contains("denied") {
+        return true;
+    }
+
+    // Specific log structures
+    if lower.contains("pam_unix") || lower.contains("logname") || lower.contains("session opened")
+        || lower.contains("session closed") {
+        return true;
+    }
+
+    false
 }
 
 pub struct LogMatcher {
@@ -404,15 +560,27 @@ impl LogMatcher {
         snapshot.match_batch(log_lines)
     }
 
-    /// Parallel batch matching with per-thread scratch space
-    /// Uses rayon for parallel processing with thread-local scratch buffers
+    /// Parallel batch matching with chunked processing for SIMD-style optimization
+    /// Uses rayon for parallel processing across chunks for better cache locality
     pub fn match_batch_parallel(&self, log_lines: &[&str]) -> Vec<Option<u64>> {
         use rayon::prelude::*;
+
+        const CHUNK_SIZE: usize = 256; // Larger chunks for parallel processing
         let snapshot = self.snapshot.load();
-        log_lines
-            .par_iter()
-            .map(|log_line| snapshot.match_log(log_line))
-            .collect()
+
+        // Process chunks in parallel
+        let results: Vec<Vec<Option<u64>>> = log_lines
+            .par_chunks(CHUNK_SIZE)
+            .map(|chunk| {
+                // Each thread processes its chunk sequentially for cache efficiency
+                chunk.iter()
+                    .map(|log_line| snapshot.match_log(log_line))
+                    .collect()
+            })
+            .collect();
+
+        // Flatten results
+        results.into_iter().flatten().collect()
     }
 
     /// Get all templates for inspection
@@ -779,4 +947,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_weighted_linux_syslog_matching() {
+        let matcher = LogMatcher::new();
+
+        // Add Linux syslog authentication failure pattern
+        matcher.add_template(LogTemplate {
+            template_id: 200,
+            pattern: r"^([A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2}) ([\w-]+) sshd\(pam_unix\)\[(\d+)\]: authentication failure; logname=(.*?) uid=(\d+) euid=(\d+) tty=([\w]+) ruser=(.*?) rhost=([\d.]+)\s*$".to_string(),
+            variables: vec!["timestamp".to_string(), "hostname".to_string(), "pid".to_string()],
+            example: "Jun 14 15:16:01 combo sshd(pam_unix)[19939]: authentication failure; logname= uid=0 euid=0 tty=NODEVssh ruser= rhost=218.188.2.4".to_string(),
+        });
+
+        // Add a competing pattern with similar generic fragments
+        matcher.add_template(LogTemplate {
+            template_id: 201,
+            pattern: r"generic log with uid=(\d+) and tty=(\w+) somewhere".to_string(),
+            variables: vec!["uid".to_string(), "tty".to_string()],
+            example: "generic log with uid=123 and tty=tty1 somewhere".to_string(),
+        });
+
+        // Real Linux syslog line
+        let test_log = "Jun 14 15:16:01 combo sshd(pam_unix)[19939]: authentication failure; logname= uid=0 euid=0 tty=NODEVssh ruser= rhost=218.188.2.4";
+
+        let result = matcher.match_log(test_log);
+
+        println!("\nWeighted matching test:");
+        println!("Log: {}", test_log);
+        println!("Matched template: {:?}", result);
+
+        // Should match template 200 (specific sshd pattern) not 201 (generic)
+        // The distinctive fragments like "sshd(pam_unix)[" and "authentication failure; logname="
+        // should have higher weight than generic " uid=" and " tty="
+        assert_eq!(result, Some(200), "Should match specific sshd template, not generic one");
+    }
+
+    #[test]
+    fn test_fragment_weights() {
+        // Test weight calculation
+        let generic_frag = " uid=";
+        let distinctive_frag = " sshd(pam_unix)[";
+        let long_frag = "]: authentication failure; logname=";
+
+        let generic_weight = calculate_fragment_weight(generic_frag);
+        let distinctive_weight = calculate_fragment_weight(distinctive_frag);
+        let long_weight = calculate_fragment_weight(long_frag);
+
+        println!("\nFragment weights:");
+        println!("  '{}' -> {:.2}", generic_frag, generic_weight);
+        println!("  '{}' -> {:.2}", distinctive_frag, distinctive_weight);
+        println!("  '{}' -> {:.2}", long_frag, long_weight);
+
+        // Distinctive fragments should have higher weight than generic ones
+        assert!(distinctive_weight > generic_weight, "Distinctive fragment should have higher weight");
+        assert!(long_weight > generic_weight, "Long fragment should have higher weight");
+    }
 }

@@ -10,22 +10,29 @@
 ///    cargo test --release --test benchmarks quick -- --nocapture
 ///    ```
 ///
-/// 2. **Throughput** - Pure matching performance with cached templates
+/// 2. **Throughput** - Pure matching performance with cached templates (sequential)
 ///    ```bash
 ///    cargo test --release --test benchmarks throughput -- --nocapture
 ///    ```
 ///
-/// 3. **Parallel** - Multi-threaded benchmark across all datasets
+/// 3. **Ultra** - Parallel + batching + SIMD-style optimization (recommended for production)
+///    ```bash
+///    cargo test --release --test benchmarks ultra -- --nocapture
+///    ```
+///    Best for: Complex log formats with many templates (Linux, OpenStack)
+///    Less effective for: Simple/fast formats (Apache, Hdfs) due to thread overhead
+///
+/// 4. **Parallel** - Multi-threaded benchmark across all datasets
 ///    ```bash
 ///    cargo test --release --test benchmarks parallel -- --nocapture
 ///    ```
 ///
-/// 4. **Accuracy** - Template generation + accuracy measurement
+/// 5. **Accuracy** - Template generation + accuracy measurement
 ///    ```bash
 ///    cargo test --release --test benchmarks accuracy -- --nocapture
 ///    ```
 ///
-/// 5. **Full** - Comprehensive benchmark (all datasets, all logs)
+/// 6. **Full** - Comprehensive benchmark (all datasets, all logs)
 ///    ```bash
 ///    cargo test --release --test benchmarks full -- --nocapture --ignored
 ///    ```
@@ -432,6 +439,175 @@ async fn full() -> anyhow::Result<()> {
 }
 
 // ============================================================================
+// Benchmark: Ultra (parallel + batching + SIMD-style optimizations)
+// ============================================================================
+
+#[tokio::test]
+async fn ultra() -> anyhow::Result<()> {
+    println!("\n{:=<100}", "");
+    println!("⚡ ULTRA BENCHMARK (Parallel + Batching + SIMD-style)");
+    println!("{:=<100}", "");
+    println!("Configuration:");
+    println!("  Threads:        {} threads", rayon::current_num_threads());
+    println!("  Batch size:     256 logs per chunk");
+    println!("  Cache locality: Optimized chunking");
+    println!("  Test size:      All available logs");
+    println!("{:=<100}\n", "");
+
+    let datasets = get_cached_datasets();
+    if datasets.is_empty() {
+        println!("⚠️  No cached templates found.");
+        return Ok(());
+    }
+
+    let start = Instant::now();
+
+    let results: Vec<DatasetResult> = datasets
+        .par_iter()
+        .filter_map(|dataset| {
+            match benchmark_single_dataset_ultra(dataset) {
+                Ok(r) => {
+                    println!(
+                        "✅ {} - {:.0} logs/sec, {:.2}% accuracy ({} logs)",
+                        dataset, r.throughput, r.grouping_accuracy, r.total_logs
+                    );
+                    Some(r)
+                }
+                Err(e) => {
+                    println!("❌ {} - Error: {}", dataset, e);
+                    None
+                }
+            }
+        })
+        .collect();
+
+    let total_time = start.elapsed().as_secs_f64();
+    print_summary_with_time("ultra", &results, total_time, Some(rayon::current_num_threads()));
+
+    Ok(())
+}
+
+// ============================================================================
+// Benchmark: Mixed (interleaved logs from multiple sources)
+// ============================================================================
+
+#[tokio::test]
+async fn mixed() -> anyhow::Result<()> {
+    println!("\n{:=<100}", "");
+    println!("🔀 MIXED BENCHMARK (Interleaved logs from ALL sources)");
+    println!("{:=<100}", "");
+    println!("Simulates production: logs from all datasets mixed together");
+    println!("{:=<100}\n", "");
+
+    // Use all available cached datasets
+    let test_datasets = get_cached_datasets();
+
+    // Load all matchers and logs from both LogHub 1.0 and 2.0
+    let mut all_data = Vec::new();
+    for dataset_name in &test_datasets {
+        match load_cached_matcher(dataset_name) {
+            Ok(matcher) => {
+                let dataset1 = LogHubDatasetLoader::new(dataset_name, "data/loghub");
+                let dataset2 = LogHubDatasetLoader::new(dataset_name, "data/loghub-2.0/2k_dataset");
+
+                let mut logs = dataset1.load_raw_logs().unwrap_or_default();
+                logs.extend(dataset2.load_raw_logs().unwrap_or_default());
+
+                if !logs.is_empty() {
+                    println!("✅ Loaded {} - {} logs", dataset_name, logs.len());
+                    all_data.push((dataset_name.to_string(), matcher, logs));
+                } else {
+                    println!("❌ Failed to load logs for {}: No data", dataset_name);
+                }
+            }
+            Err(e) => println!("❌ Failed to load matcher for {}: {}", dataset_name, e),
+        }
+    }
+
+    if all_data.is_empty() {
+        println!("⚠️  No datasets loaded");
+        return Ok(());
+    }
+
+    // Combine all templates into single matcher
+    let config = MatcherConfig::batch_processing();
+    let combined_matcher = LogMatcher::with_config(config);
+    let mut template_count = 0;
+
+    for (dataset_name, matcher, _) in &all_data {
+        let templates = matcher.get_all_templates();
+        println!("  Adding {} templates from {}", templates.len(), dataset_name);
+        for template in templates {
+            combined_matcher.add_template(template);
+        }
+        template_count += matcher.get_all_templates().len();
+    }
+
+    println!("\n📊 Combined matcher: {} templates from {} sources\n", template_count, all_data.len());
+
+    // Interleave logs from all sources (round-robin)
+    let mut interleaved_logs = Vec::new();
+    let max_logs_per_source = 500; // Take 500 from each
+
+    for i in 0..max_logs_per_source {
+        for (_, _, logs) in &all_data {
+            if i < logs.len() {
+                interleaved_logs.push(logs[i].clone());
+            }
+        }
+    }
+
+    println!("🔀 Interleaved {} logs from {} sources", interleaved_logs.len(), all_data.len());
+    let pattern_names: Vec<&str> = all_data.iter().map(|(name, _, _)| name.as_str()).take(4).collect();
+    println!("   Pattern: {}, ...\n", pattern_names.join(", "));
+
+    // Test 1: Sequential processing
+    let log_refs: Vec<&str> = interleaved_logs.iter().map(|s| s.as_str()).collect();
+
+    println!("🔹 Sequential processing:");
+    let start = Instant::now();
+    let results_seq: Vec<Option<u64>> = log_refs
+        .iter()
+        .map(|log| combined_matcher.match_log(log))
+        .collect();
+    let elapsed_seq = start.elapsed();
+    let throughput_seq = interleaved_logs.len() as f64 / elapsed_seq.as_secs_f64();
+    let latency_seq = (elapsed_seq.as_micros() as f64) / interleaved_logs.len() as f64;
+    let matched_seq = results_seq.iter().filter(|r| r.is_some()).count();
+
+    println!("  Throughput: {:.0} logs/sec", throughput_seq);
+    println!("  Latency:    {:.2}μs per log", latency_seq);
+    println!("  Match rate: {:.1}%", (matched_seq as f64 / interleaved_logs.len() as f64) * 100.0);
+
+    // Test 2: Parallel batch processing
+    println!("\n🔹 Parallel batch processing:");
+    let start = Instant::now();
+    let results_par = combined_matcher.match_batch_parallel(&log_refs);
+    let elapsed_par = start.elapsed();
+    let throughput_par = interleaved_logs.len() as f64 / elapsed_par.as_secs_f64();
+    let latency_par = (elapsed_par.as_micros() as f64) / interleaved_logs.len() as f64;
+    let matched_par = results_par.iter().filter(|r| r.is_some()).count();
+
+    println!("  Throughput: {:.0} logs/sec", throughput_par);
+    println!("  Latency:    {:.2}μs per log", latency_par);
+    println!("  Match rate: {:.1}%", (matched_par as f64 / interleaved_logs.len() as f64) * 100.0);
+
+    // Comparison
+    let speedup = throughput_par / throughput_seq;
+    println!("\n📈 Speedup: {:.2}x", speedup);
+
+    if speedup > 1.0 {
+        println!("   ✅ Parallel processing is {:.1}% faster", (speedup - 1.0) * 100.0);
+    } else {
+        println!("   ⚠️  Sequential processing is {:.1}% faster", (1.0 - speedup) * 100.0);
+    }
+
+    println!("\n{:=<100}", "");
+
+    Ok(())
+}
+
+// ============================================================================
 // Core Benchmark Functions
 // ============================================================================
 
@@ -474,9 +650,16 @@ fn benchmark_single_dataset_cached(
     max_logs: Option<usize>,
 ) -> anyhow::Result<DatasetResult> {
     let matcher = load_cached_matcher(dataset_name)?;
-    let dataset = LogHubDatasetLoader::new(dataset_name, "data/loghub");
-    let logs = dataset.load_raw_logs()?;
-    let ground_truth = dataset.load_ground_truth()?;
+
+    // Load from both LogHub 1.0 and 2.0 for more data
+    let dataset1 = LogHubDatasetLoader::new(dataset_name, "data/loghub");
+    let dataset2 = LogHubDatasetLoader::new(dataset_name, "data/loghub-2.0/2k_dataset");
+
+    let mut logs = dataset1.load_raw_logs().unwrap_or_default();
+    logs.extend(dataset2.load_raw_logs().unwrap_or_default());
+
+    let mut ground_truth = dataset1.load_ground_truth().unwrap_or_default();
+    ground_truth.extend(dataset2.load_ground_truth().unwrap_or_default());
 
     let test_size = max_logs.unwrap_or(logs.len()).min(logs.len());
     let test_logs = &logs[..test_size];
@@ -487,6 +670,49 @@ fn benchmark_single_dataset_cached(
         .iter()
         .map(|log| matcher.match_log(log))
         .collect();
+    let elapsed = start.elapsed();
+
+    let matched_count = template_assignments.iter().filter(|t| t.is_some()).count();
+    let throughput = test_size as f64 / elapsed.as_secs_f64();
+    let avg_latency_us = (elapsed.as_micros() as f64) / test_size as f64;
+    let match_rate = (matched_count as f64 / test_size as f64) * 100.0;
+    let grouping_accuracy = calculate_accuracy(&template_assignments, test_gt);
+
+    Ok(DatasetResult {
+        dataset_name: dataset_name.to_string(),
+        templates_loaded: matcher.get_all_templates().len(),
+        total_logs: test_size,
+        matched_logs: matched_count,
+        elapsed_secs: elapsed.as_secs_f64(),
+        throughput,
+        avg_latency_us,
+        match_rate,
+        grouping_accuracy,
+    })
+}
+
+fn benchmark_single_dataset_ultra(dataset_name: &str) -> anyhow::Result<DatasetResult> {
+    let matcher = load_cached_matcher(dataset_name)?;
+
+    // Load from both LogHub 1.0 and 2.0 for more data
+    let dataset1 = LogHubDatasetLoader::new(dataset_name, "data/loghub");
+    let dataset2 = LogHubDatasetLoader::new(dataset_name, "data/loghub-2.0/2k_dataset");
+
+    let mut logs = dataset1.load_raw_logs().unwrap_or_default();
+    logs.extend(dataset2.load_raw_logs().unwrap_or_default());
+
+    let mut ground_truth = dataset1.load_ground_truth().unwrap_or_default();
+    ground_truth.extend(dataset2.load_ground_truth().unwrap_or_default());
+
+    let test_size = logs.len();
+    let test_logs = &logs[..test_size];
+    let test_gt = &ground_truth[..test_size.min(ground_truth.len())];
+
+    // Convert to &str slices for batch processing
+    let log_refs: Vec<&str> = test_logs.iter().map(|s| s.as_str()).collect();
+
+    let start = Instant::now();
+    let template_assignments = matcher.match_batch_parallel(&log_refs);
     let elapsed = start.elapsed();
 
     let matched_count = template_assignments.iter().filter(|t| t.is_some()).count();

@@ -1,5 +1,6 @@
 // Core modules
 pub mod llm_service;
+pub mod llm_config;
 pub mod log_format_detector;
 pub mod log_matcher;
 pub mod matcher_config;

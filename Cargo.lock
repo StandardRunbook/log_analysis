@@ -1225,6 +1225,7 @@ dependencies = [
  "clickhouse",
  "csv",
  "dotenvy",
+ "futures",
  "im",
  "lru",
  "memchr",

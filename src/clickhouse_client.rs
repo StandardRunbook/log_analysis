@@ -372,6 +372,29 @@ impl ClickHouseClient {
 
         Ok(examples)
     }
+
+    /// Insert template with auto-generated ID (alias for insert_template)
+    pub async fn insert_template_with_autoid(&self, template: TemplateRow) -> Result<u64> {
+        self.insert_template(template).await
+    }
+
+    /// Get templates for a specific org and log stream
+    pub async fn get_templates_for_stream(&self, org_id: &str, log_stream_id: &str) -> Result<Vec<TemplateRow>> {
+        let templates = self.client
+            .query("SELECT org_id, log_stream_id, template_id, pattern, variables, example, created_at FROM templates WHERE org_id = ? AND log_stream_id = ? ORDER BY template_id")
+            .bind(org_id)
+            .bind(log_stream_id)
+            .fetch_all::<TemplateRow>()
+            .await?;
+
+        Ok(templates)
+    }
+
+    /// Clear all templates from the database
+    pub async fn clear_templates(&self) -> Result<()> {
+        self.client.query("TRUNCATE TABLE templates").execute().await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

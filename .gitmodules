@@ -1,3 +1,6 @@
 [submodule "hover-schema"]
 	path = hover-schema
 	url = https://github.com/StandardRunbook/hover-schema.git
+[submodule "data/loghub-2.0"]
+	path = data/loghub-2.0
+	url = https://github.com/logpai/loghub-2.0.git
