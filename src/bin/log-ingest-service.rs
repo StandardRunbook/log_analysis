@@ -75,6 +75,7 @@ impl AppState {
         match clickhouse.get_templates().await {
             Ok(templates) => {
                 info!("Loaded {} templates from ClickHouse", templates.len());
+
                 for template in templates {
                     matcher.add_template(LogTemplate {
                         template_id: template.template_id,
@@ -211,24 +212,35 @@ fn spawn_batch_processor(
 
                     loop {
                         match llm.generate_template(&log_line).await {
-                            Ok(template) => {
+                            Ok(mut template) => {
                                 if retry_count > 0 {
                                     info!("LLM succeeded after {} retries for log: {}", retry_count, log_line);
                                 }
-                                debug!("LLM generated template ID {} for log: {}", template.template_id, log_line);
 
-                                // Add template to matcher
-                                m.add_template(template.clone());
-
-                                // Persist template to ClickHouse
+                                // Persist template to ClickHouse first (with template_id=0)
+                                // ClickHouse will assign the actual ID
                                 let template_row = log_analyzer::clickhouse_client::TemplateRow {
-                                    template_id: template.template_id,
+                                    org_id: "default".to_string(),
+                                    log_stream_id: "llm-generated".to_string(),
+                                    template_id: 0,  // ClickHouse will assign ID
                                     pattern: template.pattern.clone(),
                                     variables: template.variables.clone(),
                                     example: template.example.clone(),
+                                    created_at: Utc::now(),
                                 };
-                                if let Err(e) = ch.insert_template(template_row).await {
-                                    error!("Failed to save template to ClickHouse: {}", e);
+
+                                match ch.insert_template(template_row).await {
+                                    Ok(assigned_id) => {
+                                        // Update template with ClickHouse-assigned ID
+                                        template.template_id = assigned_id;
+                                        debug!("ClickHouse assigned template ID {} for log: {}", assigned_id, log_line);
+
+                                        // Add template to matcher with the correct ID
+                                        m.add_template(template);
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to save template to ClickHouse: {}", e);
+                                    }
                                 }
                                 break; // Success!
                             }

@@ -362,6 +362,11 @@ impl LogMatcher {
         self.next_template_id.fetch_add(1, Ordering::SeqCst)
     }
 
+    /// Set the next template ID (used when loading from database to avoid collisions)
+    pub fn set_next_template_id(&self, next_id: u64) {
+        self.next_template_id.store(next_id, Ordering::SeqCst);
+    }
+
     /// Add a new template to the matcher (thread-safe)
     pub fn add_template(&self, mut template: LogTemplate) {
         // Assign a unique ID if it's 0 (placeholder from LLM)

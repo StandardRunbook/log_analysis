@@ -43,10 +43,13 @@ impl Serialize for LogEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, clickhouse::Row)]
 pub struct TemplateRow {
+    pub org_id: String,
+    pub log_stream_id: String,
     pub template_id: u64,
     pub pattern: String,
     pub variables: Vec<String>,
     pub example: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]
@@ -223,18 +226,40 @@ impl ClickHouseClient {
         }).collect())
     }
 
-    /// Store template
-    pub async fn insert_template(&self, template: TemplateRow) -> Result<()> {
+    /// Store template and return the assigned template_id
+    /// If template_id is 0, generates next available ID from ClickHouse
+    pub async fn insert_template(&self, mut template: TemplateRow) -> Result<u64> {
+        // If template_id is 0, get next available ID
+        if template.template_id == 0 {
+            template.template_id = self.get_next_template_id().await?;
+        }
+
         let mut insert = self.client.insert("templates")?;
         insert.write(&template).await?;
         insert.end().await?;
-        Ok(())
+
+        Ok(template.template_id)
+    }
+
+    /// Get next available template ID from ClickHouse
+    async fn get_next_template_id(&self) -> Result<u64> {
+        #[derive(Debug, clickhouse::Row, Deserialize)]
+        struct MaxIdRow {
+            max_id: u64,
+        }
+
+        let result = self.client
+            .query("SELECT COALESCE(max(template_id), 0) as max_id FROM templates")
+            .fetch_one::<MaxIdRow>()
+            .await?;
+
+        Ok(result.max_id + 1)
     }
 
     /// Get all templates
     pub async fn get_templates(&self) -> Result<Vec<TemplateRow>> {
         let templates = self.client
-            .query("SELECT template_id, pattern, variables, example FROM templates")
+            .query("SELECT org_id, log_stream_id, template_id, pattern, variables, example, created_at FROM templates")
             .fetch_all::<TemplateRow>()
             .await?;
 

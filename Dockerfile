@@ -1,5 +1,5 @@
 # Multi-stage build for optimized Rust application
-FROM rust:1.75-slim-bookworm AS builder
+FROM rust:1.82-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -13,16 +13,10 @@ WORKDIR /app
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Create a dummy main to cache dependencies
-RUN mkdir -p src/bin && \
-    echo "fn main() {}" > src/bin/log-ingest-service.rs && \
-    echo "" > src/lib.rs
+# Copy hover-schema submodule (needed for schema include)
+COPY hover-schema ./hover-schema
 
-# Build dependencies (this layer will be cached)
-RUN cargo build --release --bin log-ingest-service && \
-    rm -rf src target/release/deps/log_*
-
-# Copy the actual source code
+# Copy the actual source code (we need all modules for compilation)
 COPY src ./src
 
 # Build the application

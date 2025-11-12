@@ -14,10 +14,14 @@ pub struct LLMServiceClient {
 
 impl LLMServiceClient {
     pub fn new(provider: String, api_key: String, model: String) -> Self {
+        let ollama_endpoint = std::env::var("OLLAMA_ENDPOINT")
+            .unwrap_or_else(|_| "http://localhost:11434".to_string());
+
         tracing::info!(
-            "🤖 LLM Service configured with provider: {}, model: {}",
+            "🤖 LLM Service configured with provider: {}, model: {}, ollama_endpoint: {}",
             provider,
-            model
+            model,
+            ollama_endpoint
         );
         Self {
             provider,
@@ -27,7 +31,7 @@ impl LLMServiceClient {
                 .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
-            ollama_endpoint: "http://localhost:11434".to_string(),
+            ollama_endpoint,
         }
     }
 
@@ -206,15 +210,9 @@ Respond with ONLY the JSON object, no explanation:
                     })
                     .unwrap_or_else(Vec::new);
 
-                // Generate a unique template ID
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut hasher = DefaultHasher::new();
-                pattern.hash(&mut hasher);
-                let template_id = hasher.finish();
-
+                // Use placeholder ID - LogMatcher will assign unique ID
                 Ok(LogTemplate {
-                    template_id,
+                    template_id: 0,
                     pattern,
                     variables,
                     example: log_line.to_string(),
