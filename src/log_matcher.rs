@@ -525,9 +525,13 @@ impl LogMatcher {
 
     /// Add a new template to the matcher (thread-safe)
     pub fn add_template(&self, mut template: LogTemplate) {
-        // Assign a unique ID if it's 0 (placeholder from LLM)
+        // IDs should be assigned at the synthesis site via
+        // `template_id::template_id_from_pattern`, but fall back to computing
+        // it here for callers that haven't been updated. The auto-increment
+        // path (`next_id`) is retained only for legacy serialized state.
         if template.template_id == 0 {
-            template.template_id = self.next_id();
+            template.template_id =
+                crate::template_id::template_id_from_pattern(&template.pattern);
         }
 
         self.snapshot.rcu(|old_snapshot| {

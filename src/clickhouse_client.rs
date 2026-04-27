@@ -227,11 +227,16 @@ impl ClickHouseClient {
     }
 
     /// Store template and return the assigned template_id
-    /// If template_id is 0, generates next available ID from ClickHouse
+    ///
+    /// IDs should be content-derived hashes assigned at synthesis time (see
+    /// `template_id::template_id_from_pattern`). If the caller hasn't done
+    /// so, compute it here from the pattern. The legacy MAX(template_id)+1
+    /// path is kept only as a last-resort fallback and should not be reached
+    /// from any current call site.
     pub async fn insert_template(&self, mut template: TemplateRow) -> Result<u64> {
-        // If template_id is 0, get next available ID
         if template.template_id == 0 {
-            template.template_id = self.get_next_template_id().await?;
+            template.template_id =
+                crate::template_id::template_id_from_pattern(&template.pattern);
         }
 
         let mut insert = self.client.insert("templates")?;

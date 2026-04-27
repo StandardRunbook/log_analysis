@@ -22,19 +22,19 @@ use log_analyzer::matcher_config::MatcherConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Semaphore};
-use tokio::time::{interval, Instant};
+use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
 use tracing::{info, warn, error, debug};
 
 const DEFAULT_PORT: u16 = 3002;
 const CLICKHOUSE_BUFFER_SIZE: usize = 1000;
 const CLICKHOUSE_FLUSH_INTERVAL_SECS: u64 = 5;
-const LLM_BATCH_SIZE: usize = 10;
-const LLM_BATCH_TIMEOUT_SECS: u64 = 2;
-const LLM_MAX_CONCURRENT_BATCHES: usize = 5;
 const LLM_MAX_RETRIES: u32 = 3;
 const LLM_INITIAL_BACKOFF_MS: u64 = 1000;
+// Bounded queue for unmatched logs awaiting LLM synthesis. One consumer
+// task drains this queue sequentially. On burst (queue full), new misses
+// are dropped — the matcher will see those shapes again on next arrival.
+const LLM_QUEUE_CAPACITY: usize = 10_000;
 
 // ============================================================================
 // Application State
@@ -45,7 +45,7 @@ struct AppState {
     matcher: Arc<LogMatcher>,
     writer: Arc<BufferedClickHouseWriter>,
     clickhouse: Arc<ClickHouseClient>,
-    unmatched_tx: mpsc::UnboundedSender<String>,
+    unmatched_tx: mpsc::Sender<LogEntry>,
 }
 
 impl AppState {
@@ -96,14 +96,22 @@ impl AppState {
         let llm_config = MultiLLMConfig::from_env();
         let llm_client = Arc::new(LLMServiceClient::new_with_config(llm_config)?);
 
-        // Create channel for unmatched logs
-        let (unmatched_tx, unmatched_rx) = mpsc::unbounded_channel();
+        // Bounded channel — single consumer drains it sequentially.
+        let (unmatched_tx, unmatched_rx) = mpsc::channel(LLM_QUEUE_CAPACITY);
 
         // Spawn background task to process unmatched logs
         let matcher_clone = matcher.clone();
         let clickhouse_clone = clickhouse.clone();
+        let writer_for_llm = writer.clone();
         tokio::spawn(async move {
-            process_unmatched_logs(unmatched_rx, llm_client, matcher_clone, clickhouse_clone).await;
+            process_unmatched_logs(
+                unmatched_rx,
+                llm_client,
+                matcher_clone,
+                clickhouse_clone,
+                writer_for_llm,
+            )
+            .await;
         });
         info!("Started LLM template generation service");
 
@@ -116,165 +124,104 @@ impl AppState {
     }
 }
 
-/// Background task to process unmatched logs with batching and thread pool
+/// Background task that drains the unmatched-log queue.
+///
+/// Owns the cold-path write: queued entries are inserted into the `logs`
+/// table only after a `template_id` has been determined (either by re-matching
+/// against an updated parse tree, or via LLM synthesis). We never persist a
+/// row without a template_id.
+///
+/// Natural deduplication: a burst of N records of the same novel shape
+/// produces one LLM call, not N. We re-check the matcher before each
+/// synthesis — by the time we pull the second record from the queue, the
+/// matcher has been updated by the first record's LLM result, and the
+/// re-check returns a hit.
 async fn process_unmatched_logs(
-    mut rx: mpsc::UnboundedReceiver<String>,
+    mut rx: mpsc::Receiver<LogEntry>,
     llm_client: Arc<LLMServiceClient>,
     matcher: Arc<LogMatcher>,
     clickhouse: Arc<ClickHouseClient>,
+    writer: Arc<BufferedClickHouseWriter>,
 ) {
-    info!("LLM template generation worker started (batch size: {}, max concurrent: {})",
-          LLM_BATCH_SIZE, LLM_MAX_CONCURRENT_BATCHES);
+    info!("LLM template generation worker started (single-consumer)");
 
-    let semaphore = Arc::new(Semaphore::new(LLM_MAX_CONCURRENT_BATCHES));
-    let mut batch = Vec::with_capacity(LLM_BATCH_SIZE);
-    let mut batch_timer = interval(Duration::from_secs(LLM_BATCH_TIMEOUT_SECS));
-    batch_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    loop {
-        tokio::select! {
-            // Receive new log
-            Some(log_line) = rx.recv() => {
-                batch.push(log_line);
-
-                // Process batch if full
-                if batch.len() >= LLM_BATCH_SIZE {
-                    let batch_to_process = std::mem::replace(&mut batch, Vec::with_capacity(LLM_BATCH_SIZE));
-                    spawn_batch_processor(
-                        batch_to_process,
-                        llm_client.clone(),
-                        matcher.clone(),
-                        clickhouse.clone(),
-                        semaphore.clone(),
-                    );
-                }
-            }
-
-            // Timeout - process partial batch
-            _ = batch_timer.tick() => {
-                if !batch.is_empty() {
-                    let batch_to_process = std::mem::replace(&mut batch, Vec::with_capacity(LLM_BATCH_SIZE));
-                    debug!("Processing partial batch of {} logs (timeout)", batch_to_process.len());
-                    spawn_batch_processor(
-                        batch_to_process,
-                        llm_client.clone(),
-                        matcher.clone(),
-                        clickhouse.clone(),
-                        semaphore.clone(),
-                    );
-                }
-            }
-
-            else => {
-                warn!("LLM queue closed, processing remaining batch");
-                if !batch.is_empty() {
-                    spawn_batch_processor(
-                        batch,
-                        llm_client.clone(),
-                        matcher.clone(),
-                        clickhouse.clone(),
-                        semaphore.clone(),
-                    );
-                }
-                break;
-            }
+    while let Some(mut entry) = rx.recv().await {
+        // Re-check the matcher: a previous LLM call may have already
+        // taught it this shape while this entry sat in the queue.
+        if let Some(tid) = matcher.match_log(&entry.message) {
+            debug!("Rematch hit for queued log; writing row with template {}", tid);
+            entry.template_id = tid.to_string();
+            writer.write(entry).await;
+            continue;
         }
+
+        let template = match generate_with_retry(&llm_client, &entry.message).await {
+            Some(t) => t,
+            None => {
+                // LLM gave up. Drop the row to preserve the
+                // "no rows without a template_id" invariant.
+                error!(
+                    "LLM template generation failed permanently; dropping log: {}",
+                    entry.message
+                );
+                continue;
+            }
+        };
+
+        let template_row = log_analyzer::clickhouse_client::TemplateRow {
+            org_id: entry.org_id.clone(),
+            log_stream_id: entry.log_stream_id.clone(),
+            template_id: template.template_id,
+            pattern: template.pattern.clone(),
+            variables: template.variables.clone(),
+            example: template.example.clone(),
+            created_at: Utc::now(),
+        };
+
+        if let Err(e) = clickhouse.insert_template(template_row).await {
+            error!("Failed to save template to ClickHouse: {}", e);
+            // Still install in-memory so subsequent records of this shape
+            // bypass the LLM. Catalog will reconcile on next successful write.
+        }
+        let template_id = template.template_id;
+        matcher.add_template(template);
+
+        entry.template_id = template_id.to_string();
+        writer.write(entry).await;
     }
 
     warn!("LLM template generation worker stopped");
 }
 
-/// Spawn a task to process a batch of logs in parallel
-fn spawn_batch_processor(
-    logs: Vec<String>,
-    llm_client: Arc<LLMServiceClient>,
-    matcher: Arc<LogMatcher>,
-    clickhouse: Arc<ClickHouseClient>,
-    semaphore: Arc<Semaphore>,
-) {
-    tokio::spawn(async move {
-        // Acquire semaphore permit (limits concurrent batches)
-        let _permit = semaphore.acquire().await.unwrap();
-
-        info!("Processing batch of {} logs with LLM", logs.len());
-        let start = Instant::now();
-
-        // Process each log in the batch concurrently
-        let tasks: Vec<_> = logs
-            .into_iter()
-            .map(|log_line| {
-                let llm = llm_client.clone();
-                let m = matcher.clone();
-                let ch = clickhouse.clone();
-
-                tokio::spawn(async move {
-                    // Retry with exponential backoff
-                    let mut retry_count = 0;
-                    let mut backoff_ms = LLM_INITIAL_BACKOFF_MS;
-
-                    loop {
-                        match llm.generate_template(&log_line).await {
-                            Ok(mut template) => {
-                                if retry_count > 0 {
-                                    info!("LLM succeeded after {} retries for log: {}", retry_count, log_line);
-                                }
-
-                                // Persist template to ClickHouse first (with template_id=0)
-                                // ClickHouse will assign the actual ID
-                                let template_row = log_analyzer::clickhouse_client::TemplateRow {
-                                    org_id: "default".to_string(),
-                                    log_stream_id: "llm-generated".to_string(),
-                                    template_id: 0,  // ClickHouse will assign ID
-                                    pattern: template.pattern.clone(),
-                                    variables: template.variables.clone(),
-                                    example: template.example.clone(),
-                                    created_at: Utc::now(),
-                                };
-
-                                match ch.insert_template(template_row).await {
-                                    Ok(assigned_id) => {
-                                        // Update template with ClickHouse-assigned ID
-                                        template.template_id = assigned_id;
-                                        debug!("ClickHouse assigned template ID {} for log: {}", assigned_id, log_line);
-
-                                        // Add template to matcher with the correct ID
-                                        m.add_template(template);
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to save template to ClickHouse: {}", e);
-                                    }
-                                }
-                                break; // Success!
-                            }
-                            Err(e) => {
-                                retry_count += 1;
-                                if retry_count >= LLM_MAX_RETRIES {
-                                    error!("LLM template generation failed after {} retries for log '{}': {}",
-                                           LLM_MAX_RETRIES, log_line, e);
-                                    break; // Give up
-                                }
-
-                                warn!("LLM attempt {} failed for log '{}', retrying in {}ms: {}",
-                                      retry_count, log_line, backoff_ms, e);
-
-                                // Exponential backoff with jitter
-                                let jitter = (backoff_ms as f64 * 0.1 * rand::random::<f64>()) as u64;
-                                tokio::time::sleep(Duration::from_millis(backoff_ms + jitter)).await;
-                                backoff_ms *= 2; // Double the backoff
-                            }
-                        }
-                    }
-                })
-            })
-            .collect();
-
-        // Wait for all tasks in batch to complete
-        for task in tasks {
-            let _ = task.await;
+/// Sequential LLM call with exponential backoff. Returns None if all
+/// retries are exhausted.
+async fn generate_with_retry(
+    llm_client: &LLMServiceClient,
+    log_line: &str,
+) -> Option<LogTemplate> {
+    let mut backoff_ms = LLM_INITIAL_BACKOFF_MS;
+    for attempt in 1..=LLM_MAX_RETRIES {
+        match llm_client.generate_template(log_line).await {
+            Ok(template) => return Some(template),
+            Err(e) if attempt == LLM_MAX_RETRIES => {
+                warn!(
+                    "LLM attempt {} (final) failed for log '{}': {}",
+                    attempt, log_line, e
+                );
+                return None;
+            }
+            Err(e) => {
+                warn!(
+                    "LLM attempt {} failed for log '{}', retrying in {}ms: {}",
+                    attempt, log_line, backoff_ms, e
+                );
+                let jitter = (backoff_ms as f64 * 0.1 * rand::random::<f64>()) as u64;
+                tokio::time::sleep(Duration::from_millis(backoff_ms + jitter)).await;
+                backoff_ms *= 2;
+            }
         }
-
-        info!("Batch processing completed in {:?}", start.elapsed());
-    });
+    }
+    None
 }
 
 // ============================================================================
@@ -390,20 +337,6 @@ async fn ingest_log(
 
         let template_id = template_ids[i];
 
-        // Queue unmatched logs for LLM processing
-        if template_id.is_none() {
-            debug!("No template match for log, queueing for LLM: {}", log_req.message);
-            if let Err(e) = state.unmatched_tx.send(log_req.message.clone()) {
-                warn!("Failed to queue unmatched log for LLM: {}", e);
-            }
-        } else {
-            matched_count += 1;
-        }
-
-        let template_id_str = template_id
-            .map(|tid| tid.to_string())
-            .unwrap_or_default();
-
         let log_entry = LogEntry {
             org_id: log_req.org_id.clone(),
             log_stream_id: log_req.log_stream_id.clone(),
@@ -411,25 +344,43 @@ async fn ingest_log(
             region: log_req.region.clone(),
             log_stream_name: log_req.log_stream_name.clone(),
             timestamp,
-            template_id: template_id_str,
+            template_id: template_id.map(|tid| tid.to_string()).unwrap_or_default(),
             message: log_req.message.clone(),
         };
 
-        // Write to buffered writer (logs table)
-        state.writer.write(log_entry.clone()).await;
+        match template_id {
+            Some(_) => {
+                matched_count += 1;
+                state.writer.write(log_entry.clone()).await;
 
-        // Sample logs for template_examples (1% sampling)
-        if !log_entry.template_id.is_empty() {
-            let should_sample = rand::random::<f64>() < 0.01;   // 1% sample rate
-
-            if should_sample {
-                let clickhouse = state.clickhouse.clone();
-                let example = log_entry.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = clickhouse.insert_template_example(&example).await {
-                        debug!("Failed to insert template example: {}", e);
+                // 1% sample into template_examples for hover content.
+                if rand::random::<f64>() < 0.01 {
+                    let clickhouse = state.clickhouse.clone();
+                    let example = log_entry;
+                    tokio::spawn(async move {
+                        if let Err(e) = clickhouse.insert_template_example(&example).await {
+                            debug!("Failed to insert template example: {}", e);
+                        }
+                    });
+                }
+            }
+            None => {
+                // Defer the row insert until the LLM consumer has
+                // determined a template_id (rematch hit or LLM synthesis).
+                // Never write logs rows with empty template_id.
+                debug!(
+                    "No template match, queueing entry for LLM: {}",
+                    log_req.message
+                );
+                match state.unmatched_tx.try_send(log_entry) {
+                    Ok(_) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        warn!("LLM queue full, dropping log row");
                     }
-                });
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        warn!("LLM queue closed");
+                    }
+                }
             }
         }
     }

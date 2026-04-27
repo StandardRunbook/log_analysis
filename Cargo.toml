@@ -55,6 +55,9 @@ typed-arena = "2.0"  # Typed arena allocator
 rustc-hash = "1.1"  # FxHashMap - faster than std HashMap
 ahash = "0.8"  # Fast, DoS-resistant hashing
 
+# Stable, cross-version content hash for template_id derivation
+blake3 = "1.5"
+
 # Zero-copy and small-size optimizations
 smallvec = "1.11"  # Stack-allocated vectors for small collections
 arrayvec = "0.7"  # Fixed-capacity Vec alternative

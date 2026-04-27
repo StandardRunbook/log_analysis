@@ -206,9 +206,13 @@ Respond with ONLY the JSON object, no explanation:
                     })
                     .unwrap_or_else(Vec::new);
 
-                // Use placeholder ID - ClickHouse will assign
+                // Stable, content-derived ID computed at synthesis time.
+                // Same canonical pattern always produces the same ID, so
+                // concurrent synthesis from multiple workers is idempotent
+                // and historical KL divergence stays correct across restarts.
+                let template_id = crate::template_id::template_id_from_pattern(&pattern);
                 Ok(LogTemplate {
-                    template_id: 0,
+                    template_id,
                     pattern,
                     variables,
                     example: log_line.to_string(),
