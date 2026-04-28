@@ -469,36 +469,19 @@ impl LogMatcher {
     }
 
     pub fn with_config(config: MatcherConfig) -> Self {
-        let mut snapshot = MatcherSnapshot::with_config(config.clone());
-
-        let default_templates = vec![
-            LogTemplate {
-                template_id: 1,
-                pattern: r"cpu_usage: (\d+\.\d+)% - (.*)".to_string(),
-                variables: vec!["percentage".to_string(), "message".to_string()],
-                example: "cpu_usage: 45.2% - Server load normal".to_string(),
-            },
-            LogTemplate {
-                template_id: 2,
-                pattern: r"memory_usage: (\d+\.\d+)GB - (.*)".to_string(),
-                variables: vec!["amount".to_string(), "message".to_string()],
-                example: "memory_usage: 2.5GB - Memory consumption stable".to_string(),
-            },
-            LogTemplate {
-                template_id: 3,
-                pattern: r"disk_io: (\d+)MB/s - (.*)".to_string(),
-                variables: vec!["throughput".to_string(), "message".to_string()],
-                example: "disk_io: 250MB/s - Disk activity moderate".to_string(),
-            },
-        ];
-
-        for template in default_templates {
-            snapshot = snapshot.add_template(template);
-        }
+        // No hardcoded seed templates: the matcher starts empty and gets
+        // populated either by loading the persisted catalog from ClickHouse
+        // at startup, or by LLM synthesis on the cold path. Keeping seeds in
+        // code created a parallel namespace (integer IDs 1/2/3 bypassing the
+        // content-hash scheme) and silently broke any UI that joined `logs`
+        // to `templates`, since the seeds existed only in memory.
+        let snapshot = MatcherSnapshot::with_config(config.clone());
 
         Self {
             snapshot: ArcSwap::new(Arc::new(snapshot)),
-            next_template_id: Arc::new(AtomicU64::new(4)), // Start after default templates
+            // Legacy field kept for serialization compatibility with old
+            // bincode/JSON snapshots; not consulted on the live path.
+            next_template_id: Arc::new(AtomicU64::new(1)),
             config,
         }
     }
@@ -745,9 +728,36 @@ impl Clone for LogMatcher {
 mod tests {
     use super::*;
 
+    /// Tests previously relied on three "seed" templates baked into
+    /// `LogMatcher::new()` (cpu_usage / memory_usage / disk_io with IDs
+    /// 1 / 2 / 3). Those were removed so the matcher's catalog is fully
+    /// driven by ClickHouse + LLM synthesis. Tests that want those
+    /// patterns now add them explicitly via this helper.
+    fn add_demo_templates(matcher: &LogMatcher) {
+        matcher.add_template(LogTemplate {
+            template_id: 1,
+            pattern: r"cpu_usage: (\d+\.\d+)% - (.*)".to_string(),
+            variables: vec!["percentage".to_string(), "message".to_string()],
+            example: "cpu_usage: 45.2% - Server load normal".to_string(),
+        });
+        matcher.add_template(LogTemplate {
+            template_id: 2,
+            pattern: r"memory_usage: (\d+\.\d+)GB - (.*)".to_string(),
+            variables: vec!["amount".to_string(), "message".to_string()],
+            example: "memory_usage: 2.5GB - Memory consumption stable".to_string(),
+        });
+        matcher.add_template(LogTemplate {
+            template_id: 3,
+            pattern: r"disk_io: (\d+)MB/s - (.*)".to_string(),
+            variables: vec!["throughput".to_string(), "message".to_string()],
+            example: "disk_io: 250MB/s - Disk activity moderate".to_string(),
+        });
+    }
+
     #[test]
     fn test_log_matching() {
         let matcher = LogMatcher::new();
+        add_demo_templates(&matcher);
 
         let log = "cpu_usage: 67.8% - Server load increased";
         let result = matcher.match_log(log);
@@ -768,6 +778,7 @@ mod tests {
     #[test]
     fn test_memory_matching() {
         let matcher = LogMatcher::new();
+        add_demo_templates(&matcher);
 
         let log = "memory_usage: 2.5GB - Memory consumption stable";
         let result = matcher.match_log(log);
@@ -778,6 +789,7 @@ mod tests {
     #[test]
     fn test_multiple_templates() {
         let matcher = LogMatcher::new();
+        add_demo_templates(&matcher);
 
         let test_cases = vec![
             ("cpu_usage: 50.0% - test", Some(1)),
@@ -795,6 +807,7 @@ mod tests {
     #[test]
     fn test_batch_processing() {
         let matcher = LogMatcher::new();
+        add_demo_templates(&matcher);
 
         let logs = vec![
             "cpu_usage: 50.0% - test",
@@ -824,6 +837,7 @@ mod tests {
     #[test]
     fn test_fragment_matching() {
         let matcher = LogMatcher::new();
+        add_demo_templates(&matcher);
 
         // Valid format should match based on fragments
         assert_eq!(
