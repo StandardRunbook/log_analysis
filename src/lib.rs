@@ -7,6 +7,7 @@ pub mod matcher_config;
 pub mod clickhouse_client;
 pub mod buffered_writer;
 pub mod template_id;
+pub mod otlp_server;
 
 // Dependency injection framework for benchmarking
 pub mod benchmark_runner;

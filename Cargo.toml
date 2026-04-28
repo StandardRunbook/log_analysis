@@ -83,4 +83,4 @@ once_cell = "1.19"
 opentelemetry = "0.22"
 opentelemetry-otlp = "0.15"
 opentelemetry_sdk = { version = "0.22", features = ["logs", "rt-tokio"] }
-opentelemetry-proto = "0.5"
+opentelemetry-proto = { version = "0.7", features = ["gen-tonic", "logs"] }

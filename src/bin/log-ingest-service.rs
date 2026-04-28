@@ -19,6 +19,7 @@ use log_analyzer::llm_service::LLMServiceClient;
 use log_analyzer::llm_config::MultiLLMConfig;
 use log_analyzer::log_matcher::{LogMatcher, LogTemplate};
 use log_analyzer::matcher_config::MatcherConfig;
+use log_analyzer::otlp_server::OtlpLogsServer;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +28,7 @@ use tower_http::cors::CorsLayer;
 use tracing::{info, warn, error, debug};
 
 const DEFAULT_PORT: u16 = 3002;
+const DEFAULT_OTLP_GRPC_PORT: u16 = 4317;
 const CLICKHOUSE_BUFFER_SIZE: usize = 1000;
 const CLICKHOUSE_FLUSH_INTERVAL_SECS: u64 = 5;
 const LLM_MAX_RETRIES: u32 = 3;
@@ -327,7 +329,10 @@ async fn ingest_log(
     // Build log entries and queue unmatched for LLM
     let mut matched_count = 0;
 
-    for (i, log_req) in logs.iter().enumerate() {
+    // Take ownership of each request so we can move its String fields
+    // into LogEntry without cloning. `template_ids` was computed against
+    // borrowed messages above; we still index into it by position.
+    for (i, log_req) in logs.into_iter().enumerate() {
         let timestamp = log_req
             .timestamp
             .as_ref()
@@ -338,40 +343,40 @@ async fn ingest_log(
         let template_id = template_ids[i];
 
         let log_entry = LogEntry {
-            org_id: log_req.org_id.clone(),
-            log_stream_id: log_req.log_stream_id.clone(),
-            service: log_req.service.clone(),
-            region: log_req.region.clone(),
-            log_stream_name: log_req.log_stream_name.clone(),
+            org_id: log_req.org_id,
+            log_stream_id: log_req.log_stream_id,
+            service: log_req.service,
+            region: log_req.region,
+            log_stream_name: log_req.log_stream_name,
             timestamp,
             template_id: template_id.map(|tid| tid.to_string()).unwrap_or_default(),
-            message: log_req.message.clone(),
+            message: log_req.message,
         };
 
         match template_id {
             Some(_) => {
                 matched_count += 1;
-                state.writer.write(log_entry.clone()).await;
 
                 // 1% sample into template_examples for hover content.
-                if rand::random::<f64>() < 0.01 {
+                // Sample BEFORE moving log_entry into the writer, so we
+                // only clone on the rare sampling path.
+                let sampled = rand::random::<f64>() < 0.01;
+                if sampled {
                     let clickhouse = state.clickhouse.clone();
-                    let example = log_entry;
+                    let example = log_entry.clone();
                     tokio::spawn(async move {
                         if let Err(e) = clickhouse.insert_template_example(&example).await {
                             debug!("Failed to insert template example: {}", e);
                         }
                     });
                 }
+
+                state.writer.write(log_entry).await;
             }
             None => {
                 // Defer the row insert until the LLM consumer has
                 // determined a template_id (rematch hit or LLM synthesis).
                 // Never write logs rows with empty template_id.
-                debug!(
-                    "No template match, queueing entry for LLM: {}",
-                    log_req.message
-                );
                 match state.unmatched_tx.try_send(log_entry) {
                     Ok(_) => {}
                     Err(mpsc::error::TrySendError::Full(_)) => {
@@ -421,6 +426,30 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Templates loaded: {}", state.matcher.get_all_templates().len());
     info!("Optimal batch size: {}", state.matcher.optimal_batch_size());
+
+    // Spawn the OTLP/gRPC ingest server alongside the JSON HTTP server.
+    // Same matcher / writer / unmatched-queue state. This is the path
+    // production OTel collectors will use.
+    let otlp_port: u16 = std::env::var("OTLP_GRPC_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_OTLP_GRPC_PORT);
+    let otlp_addr: std::net::SocketAddr = format!("0.0.0.0:{}", otlp_port).parse()?;
+    let otlp_server = OtlpLogsServer::new(
+        state.matcher.clone(),
+        state.writer.clone(),
+        state.unmatched_tx.clone(),
+    );
+    tokio::spawn(async move {
+        info!("🚀 OTLP/gRPC LogsService listening on {}", otlp_addr);
+        if let Err(e) = tonic::transport::Server::builder()
+            .add_service(otlp_server.into_service())
+            .serve(otlp_addr)
+            .await
+        {
+            error!("OTLP/gRPC server stopped: {}", e);
+        }
+    });
 
     // Build router
     let app = Router::new()
