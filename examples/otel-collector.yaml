@@ -16,7 +16,7 @@ processors:
   resource:
     attributes:
       - key: org_id
-        value: "otel-real-collector"
+        value: "e2e-grafana-demo"
         action: insert
       - key: log_stream_id
         value: "varied-shapes"
