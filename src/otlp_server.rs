@@ -65,6 +65,10 @@ impl LogsService for OtlpLogsServer {
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
         let req = request.into_inner();
 
+        // Accumulate matched entries across the whole request and send
+        // them to the writer in one channel op at the end.
+        let mut matched_entries: Vec<LogEntry> = Vec::new();
+
         for resource_logs in req.resource_logs {
             let attrs = resource_logs
                 .resource
@@ -123,9 +127,7 @@ impl LogsService for OtlpLogsServer {
                     };
 
                     match template_id {
-                        Some(_) => {
-                            self.writer.write(entry).await;
-                        }
+                        Some(_) => matched_entries.push(entry),
                         None => {
                             if let Err(e) = self.unmatched_tx.try_send(entry) {
                                 debug!("OTLP unmatched queue overflow: {}", e);
@@ -134,6 +136,10 @@ impl LogsService for OtlpLogsServer {
                     }
                 }
             }
+        }
+
+        if !matched_entries.is_empty() {
+            self.writer.write_batch(matched_entries).await;
         }
 
         Ok(Response::new(ExportLogsServiceResponse {

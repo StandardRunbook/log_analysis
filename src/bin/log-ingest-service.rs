@@ -329,9 +329,11 @@ async fn ingest_log(
     // Build log entries and queue unmatched for LLM
     let mut matched_count = 0;
 
-    // Take ownership of each request so we can move its String fields
-    // into LogEntry without cloning. `template_ids` was computed against
-    // borrowed messages above; we still index into it by position.
+    // Accumulate matched entries locally; one channel send to the writer
+    // at the end of the loop instead of one send per log. Unmatched
+    // entries still fan out to the LLM queue per-record (cold path).
+    let mut matched_entries: Vec<LogEntry> = Vec::with_capacity(log_count);
+
     for (i, log_req) in logs.into_iter().enumerate() {
         let timestamp = log_req
             .timestamp
@@ -358,10 +360,8 @@ async fn ingest_log(
                 matched_count += 1;
 
                 // 1% sample into template_examples for hover content.
-                // Sample BEFORE moving log_entry into the writer, so we
-                // only clone on the rare sampling path.
-                let sampled = rand::random::<f64>() < 0.01;
-                if sampled {
+                // Clone only on the sampled path; the bulk path moves.
+                if rand::random::<f64>() < 0.01 {
                     let clickhouse = state.clickhouse.clone();
                     let example = log_entry.clone();
                     tokio::spawn(async move {
@@ -371,7 +371,7 @@ async fn ingest_log(
                     });
                 }
 
-                state.writer.write(log_entry).await;
+                matched_entries.push(log_entry);
             }
             None => {
                 // Defer the row insert until the LLM consumer has
@@ -388,6 +388,10 @@ async fn ingest_log(
                 }
             }
         }
+    }
+
+    if !matched_entries.is_empty() {
+        state.writer.write_batch(matched_entries).await;
     }
 
     info!("Successfully ingested {} log(s) ({} matched)", log_count, matched_count);

@@ -22,18 +22,17 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, info, warn};
 
-/// Channel capacity for buffered writes. Must be large enough to absorb
-/// brief bursts above ClickHouse's write rate without applying
-/// backpressure to HTTP handlers. At 1000 logs per batch and ~10ms per
-/// flush, 100K is roughly 1 second of headroom at full burst.
-const CHANNEL_CAPACITY: usize = 100_000;
+/// Channel capacity is in *batches* (`Vec<LogEntry>`), not individual
+/// records. Each batch typically carries one HTTP/OTLP request's worth
+/// of logs, so 10K batches is plenty of headroom for bursts.
+const CHANNEL_CAPACITY: usize = 10_000;
 
 pub struct BufferedClickHouseWriter {
-    tx: mpsc::Sender<LogEntry>,
+    tx: mpsc::Sender<Vec<LogEntry>>,
     // Receiver is taken at `start_background_flusher` time; holding it in
     // the struct keeps `new()` synchronous while letting the writer task
     // own the receiver after spawn.
-    rx: Mutex<Option<mpsc::Receiver<LogEntry>>>,
+    rx: Mutex<Option<mpsc::Receiver<Vec<LogEntry>>>>,
     clickhouse: Arc<ClickHouseClient>,
     max_batch_size: usize,
     flush_interval: Duration,
@@ -55,11 +54,23 @@ impl BufferedClickHouseWriter {
         }
     }
 
-    /// Hot-path entry. Sends the log into the writer's channel; awaits
-    /// only if the channel is at capacity (sustained overload), in which
-    /// case the caller experiences natural backpressure.
+    /// Send a single log record. Wraps it in a single-element batch
+    /// internally; cheap, but prefer `write_batch` from any hot-path
+    /// caller that already has many records grouped (HTTP/OTLP request
+    /// handlers).
     pub async fn write(&self, log: LogEntry) {
-        if let Err(e) = self.tx.send(log).await {
+        self.write_batch(vec![log]).await
+    }
+
+    /// Hot-path entry for batched callers: send a whole request's worth
+    /// of records in one channel op. Compared to `write` per record,
+    /// this collapses N channel ops + N receiver wakeups into 1, which
+    /// matters at hundreds-of-K logs/sec.
+    pub async fn write_batch(&self, logs: Vec<LogEntry>) {
+        if logs.is_empty() {
+            return;
+        }
+        if let Err(e) = self.tx.send(logs).await {
             error!("BufferedClickHouseWriter: channel closed: {}", e);
         }
     }
@@ -86,7 +97,7 @@ impl BufferedClickHouseWriter {
 }
 
 async fn run_writer_task(
-    mut rx: mpsc::Receiver<LogEntry>,
+    mut rx: mpsc::Receiver<Vec<LogEntry>>,
     clickhouse: Arc<ClickHouseClient>,
     max_batch_size: usize,
     flush_interval: Duration,
@@ -108,23 +119,33 @@ async fn run_writer_task(
             // entries have arrived since the last tick.
             _ = ticker.tick() => {
                 if !batch.is_empty() {
-                    flush(&clickhouse, &mut batch, "time").await;
+                    let to_flush = std::mem::replace(&mut batch, Vec::with_capacity(max_batch_size));
+                    flush(&clickhouse, to_flush, "time").await;
                 }
             }
 
-            // Drain entries from the channel.
+            // Drain incoming batches from the channel.
             recv = rx.recv() => {
                 match recv {
-                    Some(entry) => {
-                        batch.push(entry);
+                    Some(mut incoming) => {
+                        batch.append(&mut incoming);
+                        // If this push tipped us over the size threshold,
+                        // flush whatever we have. We don't try to slice at
+                        // exactly max_batch_size — a slightly-larger flush
+                        // is cheaper than the bookkeeping to split it.
                         if batch.len() >= max_batch_size {
-                            flush(&clickhouse, &mut batch, "size").await;
+                            let to_flush = std::mem::replace(
+                                &mut batch,
+                                Vec::with_capacity(max_batch_size),
+                            );
+                            flush(&clickhouse, to_flush, "size").await;
                         }
                     }
                     None => {
                         // Channel closed — drain remaining entries and exit.
                         if !batch.is_empty() {
-                            flush(&clickhouse, &mut batch, "shutdown").await;
+                            let to_flush = std::mem::take(&mut batch);
+                            flush(&clickhouse, to_flush, "shutdown").await;
                         }
                         break;
                     }
@@ -134,8 +155,7 @@ async fn run_writer_task(
     }
 }
 
-async fn flush(clickhouse: &ClickHouseClient, batch: &mut Vec<LogEntry>, trigger: &str) {
-    let logs = std::mem::take(batch);
+async fn flush(clickhouse: &ClickHouseClient, logs: Vec<LogEntry>, trigger: &str) {
     let count = logs.len();
     debug!("Flushing {} logs to ClickHouse ({} trigger)", count, trigger);
     if let Err(e) = clickhouse.insert_logs_batch(logs).await {
