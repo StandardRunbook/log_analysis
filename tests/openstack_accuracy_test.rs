@@ -1,6 +1,7 @@
 // OpenStack log grouping accuracy test
 // Uses the LLM-based service to parse logs and compares with ground truth
 
+use log_analyzer::llm_config::MultiLLMConfig;
 use log_analyzer::llm_service::LLMServiceClient;
 use log_analyzer::log_matcher::LogMatcher;
 use std::collections::HashMap;
@@ -73,12 +74,17 @@ async fn test_openstack_grouping_accuracy() {
     );
     println!("   ✓ Loaded {} raw log lines\n", raw_logs.len());
 
-    // Initialize the LLM service and matcher with Ollama (using smaller, faster model)
-    let llm_client = LLMServiceClient::new(
-        "ollama".to_string(),
-        "".to_string(),
-        "llama3:latest".to_string(), // 4.7GB - much faster than qwen3-coder
+    // Pick up provider / model / API key from .env or environment.
+    // Set LLM_PROVIDER, LLM_MODEL, LLM_API_KEY in .env to use a managed model
+    // (e.g. anthropic + claude-haiku-4-5-20251001). Defaults to local ollama.
+    dotenvy::dotenv().ok();
+    let config = MultiLLMConfig::from_env();
+    println!(
+        "🤖 Using LLM provider: {} model: {}",
+        config.providers[0].provider, config.providers[0].model
     );
+    let llm_client =
+        LLMServiceClient::new_with_config(config).expect("Failed to create LLM client");
 
     let matcher = Arc::new(RwLock::new(LogMatcher::new()));
 

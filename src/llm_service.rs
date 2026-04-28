@@ -65,17 +65,35 @@ impl ProviderClient {
 
         let prompt = Self::build_prompt(log_line);
 
-        let request_body = serde_json::json!({
-            "model": self.config.model,
+        // Reasoning models (o1, o3, ...) behave differently from chat models:
+        // - no `temperature`
+        // - need `max_completion_tokens`, and the budget covers internal
+        //   reasoning tokens too — so it must be much larger
+        // - `response_format: json_object` support has been spotty across o-series
+        //   versions; safer to omit and rely on prompt discipline
+        let model = &self.config.model;
+        let is_reasoning_model = model.starts_with('o')
+            && model
+                .chars()
+                .nth(1)
+                .map_or(false, |c| c.is_ascii_digit());
+
+        let mut request_body = serde_json::json!({
+            "model": model,
             "messages": [
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            "temperature": 0.1,
-            "max_tokens": 1000
         });
+        if is_reasoning_model {
+            request_body["max_completion_tokens"] = serde_json::json!(8000);
+        } else {
+            request_body["max_completion_tokens"] = serde_json::json!(1000);
+            request_body["temperature"] = serde_json::json!(0.1);
+            request_body["response_format"] = serde_json::json!({ "type": "json_object" });
+        }
 
         let response = self.http_client
             .post("https://api.openai.com/v1/chat/completions")
