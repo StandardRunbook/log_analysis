@@ -46,7 +46,6 @@ const LLM_QUEUE_CAPACITY: usize = 10_000;
 struct AppState {
     matcher: Arc<LogMatcher>,
     writer: Arc<BufferedClickHouseWriter>,
-    clickhouse: Arc<ClickHouseClient>,
     unmatched_tx: mpsc::Sender<LogEntry>,
 }
 
@@ -120,7 +119,6 @@ impl AppState {
         Ok(Self {
             matcher,
             writer,
-            clickhouse,
             unmatched_tx,
         })
     }
@@ -358,19 +356,6 @@ async fn ingest_log(
         match template_id {
             Some(_) => {
                 matched_count += 1;
-
-                // 1% sample into template_examples for hover content.
-                // Clone only on the sampled path; the bulk path moves.
-                if rand::random::<f64>() < 0.01 {
-                    let clickhouse = state.clickhouse.clone();
-                    let example = log_entry.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = clickhouse.insert_template_example(&example).await {
-                            debug!("Failed to insert template example: {}", e);
-                        }
-                    });
-                }
-
                 matched_entries.push(log_entry);
             }
             None => {
