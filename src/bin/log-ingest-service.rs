@@ -7,12 +7,11 @@
 
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
     Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use log_analyzer::buffered_writer::BufferedClickHouseWriter;
 use log_analyzer::clickhouse_client::{ClickHouseClient, LogEntry};
 use log_analyzer::llm_service::LLMServiceClient;
@@ -20,7 +19,7 @@ use log_analyzer::llm_config::MultiLLMConfig;
 use log_analyzer::log_matcher::{LogMatcher, LogTemplate};
 use log_analyzer::matcher_config::MatcherConfig;
 use log_analyzer::otlp_server::OtlpLogsServer;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -228,33 +227,6 @@ async fn generate_with_retry(
 // Request/Response Types
 // ============================================================================
 
-#[derive(Debug, Deserialize)]
-struct IngestRequest {
-    timestamp: Option<String>,
-    org_id: String,
-    log_stream_id: String,
-    service: String,
-    region: String,
-    log_stream_name: String,
-    message: String,
-}
-
-/// Unified request structure - accepts single log or batch
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum UnifiedIngestRequest {
-    Single(IngestRequest),
-    Batch { logs: Vec<IngestRequest> },
-}
-
-/// Unified response structure
-#[derive(Debug, Serialize)]
-struct IngestResponse {
-    accepted: usize,
-    matched: usize,
-    failed: usize,
-}
-
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: String,
@@ -287,104 +259,6 @@ async fn stats(State(state): State<AppState>) -> impl IntoResponse {
         templates_loaded: state.matcher.get_all_templates().len(),
         optimal_batch_size: state.matcher.optimal_batch_size(),
     })
-}
-
-/// Unified ingest endpoint - accepts single log or batch
-async fn ingest_log(
-    State(state): State<AppState>,
-    Json(req): Json<UnifiedIngestRequest>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    // Convert to batch format
-    let logs = match req {
-        UnifiedIngestRequest::Single(log) => vec![log],
-        UnifiedIngestRequest::Batch { logs } => logs,
-    };
-
-    if logs.is_empty() {
-        return Ok(Json(IngestResponse {
-            accepted: 0,
-            matched: 0,
-            failed: 0,
-        }));
-    }
-
-    let log_count = logs.len();
-    info!("Ingesting {} log(s)", log_count);
-
-    // Prepare messages for batch matching
-    let messages: Vec<&str> = logs.iter().map(|log| log.message.as_str()).collect();
-
-    // Batch match using optimized matcher (parallel if > 1000 logs)
-    let template_ids = if messages.len() > 1000 {
-        state.matcher.match_batch_parallel(&messages)
-    } else {
-        state.matcher.match_batch(&messages)
-    };
-
-    // Get all templates once for pattern lookup
-    let _templates = state.matcher.get_all_templates();
-
-    // Build log entries and queue unmatched for LLM
-    let mut matched_count = 0;
-
-    // Accumulate matched entries locally; one channel send to the writer
-    // at the end of the loop instead of one send per log. Unmatched
-    // entries still fan out to the LLM queue per-record (cold path).
-    let mut matched_entries: Vec<LogEntry> = Vec::with_capacity(log_count);
-
-    for (i, log_req) in logs.into_iter().enumerate() {
-        let timestamp = log_req
-            .timestamp
-            .as_ref()
-            .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(Utc::now);
-
-        let template_id = template_ids[i];
-
-        let log_entry = LogEntry {
-            org_id: log_req.org_id,
-            log_stream_id: log_req.log_stream_id,
-            service: log_req.service,
-            region: log_req.region,
-            log_stream_name: log_req.log_stream_name,
-            timestamp,
-            template_id: template_id.map(|tid| tid.to_string()).unwrap_or_default(),
-            message: log_req.message,
-        };
-
-        match template_id {
-            Some(_) => {
-                matched_count += 1;
-                matched_entries.push(log_entry);
-            }
-            None => {
-                // Defer the row insert until the LLM consumer has
-                // determined a template_id (rematch hit or LLM synthesis).
-                // Never write logs rows with empty template_id.
-                match state.unmatched_tx.try_send(log_entry) {
-                    Ok(_) => {}
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        warn!("LLM queue full, dropping log row");
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        warn!("LLM queue closed");
-                    }
-                }
-            }
-        }
-    }
-
-    if !matched_entries.is_empty() {
-        state.writer.write_batch(matched_entries).await;
-    }
-
-    info!("Successfully ingested {} log(s) ({} matched)", log_count, matched_count);
-    Ok(Json(IngestResponse {
-        accepted: log_count,
-        matched: matched_count,
-        failed: 0,
-    }))
 }
 
 // ============================================================================
@@ -440,38 +314,23 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Build router
+    // HTTP server: ops/diagnostics only. Ingest goes through OTLP/gRPC.
     let app = Router::new()
         .route("/health", get(health))
         .route("/stats", get(stats))
-        .route("/logs/ingest", post(ingest_log))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    // Start server
     let port = std::env::var("INGEST_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(DEFAULT_PORT);
 
     let addr = format!("0.0.0.0:{}", port);
-    info!("🚀 Log Ingestion Service listening on {}", addr);
-    info!("");
-    info!("📊 Endpoints:");
-    info!("   GET  /health        - Health check");
-    info!("   GET  /stats         - Service statistics");
-    info!("   POST /logs/ingest   - Ingest single log or batch (auto-detect)");
-    info!("");
-    info!("⚡ Performance:");
-    info!("   - Zero-copy template matching");
-    info!("   - Parallel batch processing (>1000 logs)");
-    info!("   - Direct ClickHouse writes");
-    info!("   - Expected throughput: 100K-370K logs/sec");
-    info!("");
-    info!("📝 Example:");
-    info!(r#"   curl -X POST http://localhost:{}/logs/ingest/batch \"#, port);
-    info!(r#"     -H 'Content-Type: application/json' \"#);
-    info!(r#"     -d '{{"logs": [{{"org":"1","message":"ERROR: test"}}]}}'"#);
+    info!("HTTP diagnostics listening on {}", addr);
+    info!("  GET /health  - liveness, templates loaded, ClickHouse connectivity");
+    info!("  GET /stats   - matcher stats");
+    info!("Ingest is OTLP/gRPC on port {}.", otlp_port);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
