@@ -1,0 +1,57 @@
+# OTel collector config for end-to-end testing.
+# Tails a log file, stamps tenant identification on the resource, and
+# exports OTLP/gRPC to the log-analyzer service.
+
+receivers:
+  filelog:
+    include: [/logs/varied_logs.log]
+    start_at: beginning
+    # Strip the file path attribute so it doesn't show up as record metadata.
+    include_file_path: false
+    include_file_name: false
+
+processors:
+  # Stamp tenant + stream identification onto the Resource so the
+  # log-analyzer's OTLP server can route correctly.
+  resource:
+    attributes:
+      - key: org_id
+        value: "otel-real-collector"
+        action: insert
+      - key: log_stream_id
+        value: "varied-shapes"
+        action: insert
+      - key: log_stream_name
+        value: "Varied shape test stream"
+        action: insert
+      - key: service.name
+        value: "varied-app"
+        action: insert
+      - key: cloud.region
+        value: "local"
+        action: insert
+  batch:
+    send_batch_size: 100
+    timeout: 1s
+
+exporters:
+  otlp:
+    # `${env:HOST_IP}:4317` lets us inject the host's IPv4 from outside
+    # the container so we don't fight Docker Desktop's IPv6-first DNS
+    # resolution of host.docker.internal.
+    endpoint: ${env:HOST_IP}:4317
+    tls:
+      insecure: true
+    # Our OTLP server (tonic 0.12 default) doesn't accept gzip-compressed
+    # streams; disable so the wire payload is raw protobuf.
+    compression: none
+
+service:
+  pipelines:
+    logs:
+      receivers: [filelog]
+      processors: [resource, batch]
+      exporters: [otlp]
+  telemetry:
+    logs:
+      level: info

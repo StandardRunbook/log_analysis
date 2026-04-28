@@ -239,9 +239,44 @@ impl ClickHouseClient {
                 crate::template_id::template_id_from_pattern(&template.pattern);
         }
 
-        let mut insert = self.client.insert("templates")?;
-        insert.write(&template).await?;
-        insert.end().await?;
+        // Use HTTP JSON format (JSONEachRow) rather than the clickhouse-rs
+        // binary Row format. The binary path requires the `chrono` feature
+        // for DateTime<Utc> serialization, which isn't enabled, leading to
+        // "Cannot read all data" errors at insert time. JSON is what
+        // insert_logs_batch already uses successfully.
+        #[derive(Serialize)]
+        struct TemplateJson<'a> {
+            org_id: &'a str,
+            log_stream_id: &'a str,
+            template_id: u64,
+            pattern: &'a str,
+            variables: &'a [String],
+            example: &'a str,
+            created_at: String,
+        }
+
+        let json_line = serde_json::to_string(&TemplateJson {
+            org_id: &template.org_id,
+            log_stream_id: &template.log_stream_id,
+            template_id: template.template_id,
+            pattern: &template.pattern,
+            variables: &template.variables,
+            example: &template.example,
+            created_at: template.created_at.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+        })?;
+
+        let http_client = reqwest::Client::new();
+        let response = http_client
+            .post(&self.url)
+            .query(&[("query", "INSERT INTO templates FORMAT JSONEachRow")])
+            .body(json_line)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            anyhow::bail!("ClickHouse insert_template failed: {}", error_text);
+        }
 
         Ok(template.template_id)
     }

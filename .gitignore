@@ -34,8 +34,9 @@ Cargo.lock
 # Log files (output from benchmarks and test runs)
 *.log
 
-# Shell scripts (temporary automation)
+# Shell scripts (temporary automation; check in scripts under examples/ explicitly)
 *.sh
+!examples/*.sh
 
 # IDE
 .idea
