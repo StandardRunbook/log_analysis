@@ -1,5 +1,9 @@
 # Log Analyzer
 
+[![Rust CI](https://github.com/StandardRunbook/log_analysis/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/StandardRunbook/log_analysis/actions/workflows/rust.yml)
+[![codecov](https://codecov.io/gh/StandardRunbook/log_analysis/branch/main/graph/badge.svg)](https://codecov.io/gh/StandardRunbook/log_analysis)
+[![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)](https://www.rust-lang.org/)
+
 A multi-tenant log analysis service that classifies log records into stable
 templates, persists them to ClickHouse with content-hashed `template_id`s, and
 serves long-horizon distribution-shift analytics (e.g. KL divergence) over the
