@@ -276,4 +276,167 @@ mod tests {
         assert!(pattern.contains("authentication")); // Static text
         assert!(variables.contains(&"hostname".to_string()));
     }
+
+    #[test]
+    fn test_tokenize_empty_and_whitespace() {
+        assert_eq!(FragmentClassifier::tokenize(""), Vec::<String>::new());
+        assert_eq!(FragmentClassifier::tokenize("   "), Vec::<String>::new());
+        // Single token, no delimiters: comes back as a single fragment.
+        assert_eq!(FragmentClassifier::tokenize("hello"), vec!["hello"]);
+    }
+
+    #[test]
+    fn test_build_classification_prompt_includes_fragments_and_log() {
+        let fragments = vec!["Jun".into(), "14".into()];
+        let prompt =
+            FragmentClassifier::build_classification_prompt(&fragments, "Jun 14 something");
+        // Prompt must include each fragment indexed, the full log line for
+        // context, and the canonical classification taxonomy. Otherwise
+        // the LLM has nothing to anchor on.
+        assert!(prompt.contains("\"Jun\""));
+        assert!(prompt.contains("\"14\""));
+        assert!(prompt.contains("Jun 14 something"));
+        assert!(prompt.contains("timestamp"));
+        assert!(prompt.contains("ip_address"));
+        assert!(prompt.contains("uuid"));
+    }
+
+    #[test]
+    fn test_parse_classifications_happy_path() {
+        let response = r#"["timestamp", "static_text", "ip_address", "uuid"]"#;
+        let parsed = FragmentClassifier::parse_classifications(response).unwrap();
+        assert_eq!(parsed.len(), 4);
+        assert!(matches!(parsed[0], FragmentType::Timestamp));
+        assert!(matches!(parsed[1], FragmentType::StaticText));
+        assert!(matches!(parsed[2], FragmentType::IPAddress));
+        assert!(matches!(parsed[3], FragmentType::Uuid));
+    }
+
+    #[test]
+    fn test_parse_classifications_tolerates_surrounding_prose() {
+        // Real LLM responses sometimes wrap the JSON in commentary; we
+        // only require that the array is anywhere in the response.
+        let response =
+            r#"Sure! Here's the classification: ["number", "hex"] — let me know if you need more."#;
+        let parsed = FragmentClassifier::parse_classifications(response).unwrap();
+        assert!(matches!(parsed[0], FragmentType::Number));
+        assert!(matches!(parsed[1], FragmentType::Hex));
+    }
+
+    #[test]
+    fn test_parse_classifications_unknown_falls_back_to_static_text() {
+        // The LLM occasionally invents new categories. We default to
+        // static_text rather than failing the whole record — the worst
+        // case is over-strict matching, not data loss.
+        let response = r#"["weird_category"]"#;
+        let parsed = FragmentClassifier::parse_classifications(response).unwrap();
+        assert!(matches!(parsed[0], FragmentType::StaticText));
+    }
+
+    #[test]
+    fn test_parse_classifications_rejects_non_array_response() {
+        assert!(FragmentClassifier::parse_classifications("not json at all").is_err());
+        assert!(FragmentClassifier::parse_classifications("{\"k\": \"v\"}").is_err());
+    }
+
+    #[test]
+    fn test_build_pattern_each_variable_type_emits_named_capture() {
+        // Drive every FragmentType variant through build_pattern and
+        // assert the pattern string + variables list both reflect it.
+        // This guards the variant-matrix in build_pattern from silently
+        // drifting when a new variant is added.
+        //
+        // FragmentType::Timestamp picks one of {month, time,
+        // timestamp_part, timestamp} depending on the fragment shape.
+        // Mixed alphanumeric "frag0" hits the catch-all → "timestamp".
+        let fragments: Vec<String> = (0..10).map(|i| format!("frag{}", i)).collect();
+        let classifications = vec![
+            FragmentType::Timestamp,
+            FragmentType::Hostname,
+            FragmentType::Service,
+            FragmentType::Pid,
+            FragmentType::Number,
+            FragmentType::IPAddress,
+            FragmentType::Path,
+            FragmentType::Hex,
+            FragmentType::Uuid,
+            FragmentType::Url,
+        ];
+        let (pattern, variables) = FragmentClassifier::build_pattern(&fragments, &classifications);
+        assert!(pattern.contains("frag2")); // Service is static literal
+        for expected in [
+            "timestamp", "hostname", "pid", "number",
+            "ip_address", "path", "hex", "uuid", "url",
+        ] {
+            assert!(
+                variables.iter().any(|v| v == expected || v.starts_with(&format!("{expected}_"))),
+                "expected a variable named {expected:?} in {variables:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_pattern_timestamp_subforms() {
+        // The Timestamp branch picks one of four sub-forms by inspecting
+        // the fragment text: month-name, time, digit-only, or generic.
+        let cases: &[(&str, &str)] = &[
+            ("Jun", "month"),
+            ("15:30:45", "time"),
+            ("2024", "timestamp_part"),
+            ("2024-01-15", "timestamp"), // mixed → catch-all
+        ];
+        for (frag, expected_var) in cases {
+            let (_, vars) = FragmentClassifier::build_pattern(
+                &[frag.to_string()],
+                &[FragmentType::Timestamp],
+            );
+            assert_eq!(vars, vec![expected_var.to_string()], "for {frag:?}");
+        }
+    }
+
+    #[test]
+    fn test_build_pattern_brackets_escape_around_pid() {
+        // The bracket-detection special case: '[' and ']' fragments are
+        // emitted as escaped literals and the in-between fragment becomes
+        // a capture. Common syslog shape: "sshd[19939]".
+        let (pattern, variables) = FragmentClassifier::build_pattern(
+            &["[".to_string(), "19939".to_string(), "]".to_string()],
+            &[
+                FragmentType::StaticText,
+                FragmentType::Pid,
+                FragmentType::StaticText,
+            ],
+        );
+        assert!(pattern.contains(r"\["));
+        assert!(pattern.contains(r"\]"));
+        assert_eq!(variables, vec!["pid".to_string()]);
+    }
+
+    #[test]
+    fn test_fragment_type_from_str_round_trip() {
+        // Case-insensitive parser — every canonical lowercase name must
+        // produce the matching variant. Any unknown string falls back
+        // to StaticText.
+        let pairs: &[(&str, FragmentType)] = &[
+            ("timestamp", FragmentType::Timestamp),
+            ("HOSTNAME", FragmentType::Hostname),
+            ("Service", FragmentType::Service),
+            ("pid", FragmentType::Pid),
+            ("number", FragmentType::Number),
+            ("ip_address", FragmentType::IPAddress),
+            ("path", FragmentType::Path),
+            ("hex", FragmentType::Hex),
+            ("uuid", FragmentType::Uuid),
+            ("url", FragmentType::Url),
+            ("static_text", FragmentType::StaticText),
+            ("nonsense", FragmentType::StaticText),
+        ];
+        for (input, expected) in pairs {
+            let got: FragmentType = input.parse().unwrap();
+            assert!(
+                std::mem::discriminant(&got) == std::mem::discriminant(expected),
+                "{input:?} parsed to wrong variant"
+            );
+        }
+    }
 }

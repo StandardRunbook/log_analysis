@@ -173,4 +173,147 @@ mod tests {
 
         assert!(config.validate().is_ok());
     }
+
+    fn provider(name: &str) -> LLMProviderConfig {
+        LLMProviderConfig {
+            name: name.to_string(),
+            provider: "ollama".to_string(),
+            model: "m".to_string(),
+            api_key: None,
+            endpoint: None,
+            timeout_secs: None,
+        }
+    }
+
+    #[test]
+    fn test_validate_empty_providers_rejects() {
+        let cfg = MultiLLMConfig {
+            providers: vec![],
+            consensus_strategy: ConsensusStrategy::FirstSuccess,
+            min_agreement: 1,
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_majority_needs_two_providers() {
+        let cfg = MultiLLMConfig {
+            providers: vec![provider("only")],
+            consensus_strategy: ConsensusStrategy::Majority,
+            min_agreement: 1,
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_min_agreement_must_not_exceed_providers() {
+        let cfg = MultiLLMConfig {
+            providers: vec![provider("a"), provider("b")],
+            consensus_strategy: ConsensusStrategy::MinAgreement,
+            min_agreement: 5, // > 2 providers
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_min_agreement_must_be_positive() {
+        let cfg = MultiLLMConfig {
+            providers: vec![provider("a"), provider("b")],
+            consensus_strategy: ConsensusStrategy::MinAgreement,
+            min_agreement: 0,
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_min_agreement_happy_path() {
+        let cfg = MultiLLMConfig {
+            providers: vec![provider("a"), provider("b"), provider("c")],
+            consensus_strategy: ConsensusStrategy::MinAgreement,
+            min_agreement: 2,
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_first_success_always_valid_with_one_provider() {
+        let cfg = MultiLLMConfig {
+            providers: vec![provider("solo")],
+            consensus_strategy: ConsensusStrategy::FirstSuccess,
+            min_agreement: 1,
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_consensus_strategy_serde_snake_case() {
+        // The serialization rename_all = "snake_case" matters because
+        // config files are hand-edited; test each variant round-trips.
+        let cases: &[(ConsensusStrategy, &str)] = &[
+            (ConsensusStrategy::Unanimous, "\"unanimous\""),
+            (ConsensusStrategy::Majority, "\"majority\""),
+            (ConsensusStrategy::MinAgreement, "\"min_agreement\""),
+            (ConsensusStrategy::FirstSuccess, "\"first_success\""),
+        ];
+        for (variant, expected_json) in cases {
+            assert_eq!(serde_json::to_string(variant).unwrap(), *expected_json);
+            let parsed: ConsensusStrategy = serde_json::from_str(expected_json).unwrap();
+            assert_eq!(&parsed, variant);
+        }
+    }
+
+    #[test]
+    fn test_from_env_falls_back_when_no_file_set() {
+        // When LLM_CONFIG_FILE isn't set, from_env builds a single-provider
+        // config from LLM_PROVIDER / LLM_MODEL / LLM_API_KEY / OLLAMA_ENDPOINT.
+        // Use std::env serially with a unique-prefix to avoid stomping on
+        // other tests; this test mutates env vars so don't run in parallel.
+        // (cargo test serializes within a process by default for #[test]
+        // functions in the same module.)
+        // Note: we don't unset existing env vars; this just verifies the
+        // function doesn't panic on common shapes.
+        std::env::remove_var("LLM_CONFIG_FILE");
+        std::env::set_var("LLM_PROVIDER", "openai");
+        std::env::set_var("LLM_MODEL", "gpt-4o");
+        std::env::set_var("LLM_API_KEY", "sk-test");
+        let cfg = MultiLLMConfig::from_env();
+        assert_eq!(cfg.providers.len(), 1);
+        assert_eq!(cfg.providers[0].provider, "openai");
+        assert_eq!(cfg.providers[0].model, "gpt-4o");
+        assert_eq!(cfg.providers[0].api_key, Some("sk-test".to_string()));
+        std::env::remove_var("LLM_PROVIDER");
+        std::env::remove_var("LLM_MODEL");
+        std::env::remove_var("LLM_API_KEY");
+    }
+
+    #[test]
+    fn test_from_env_loads_config_file() {
+        // Write a valid multi-LLM config to a tempfile, set
+        // LLM_CONFIG_FILE, and verify from_env reads it.
+        let tmp = std::env::temp_dir().join("llm_config_test.json");
+        let cfg = MultiLLMConfig {
+            providers: vec![provider("a"), provider("b")],
+            consensus_strategy: ConsensusStrategy::Majority,
+            min_agreement: 2,
+        };
+        std::fs::write(&tmp, serde_json::to_string(&cfg).unwrap()).unwrap();
+        std::env::set_var("LLM_CONFIG_FILE", &tmp);
+        let loaded = MultiLLMConfig::from_env();
+        assert_eq!(loaded.providers.len(), 2);
+        assert_eq!(loaded.consensus_strategy, ConsensusStrategy::Majority);
+        std::env::remove_var("LLM_CONFIG_FILE");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_from_env_invalid_config_file_falls_back() {
+        // If LLM_CONFIG_FILE points at garbage, from_env should fall
+        // through to the env-var path rather than panic.
+        let tmp = std::env::temp_dir().join("llm_config_garbage.json");
+        std::fs::write(&tmp, "this is not json").unwrap();
+        std::env::set_var("LLM_CONFIG_FILE", &tmp);
+        let _ = MultiLLMConfig::from_env(); // shouldn't panic
+        std::env::remove_var("LLM_CONFIG_FILE");
+        let _ = std::fs::remove_file(&tmp);
+    }
 }

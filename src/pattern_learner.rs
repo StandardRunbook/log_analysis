@@ -290,4 +290,72 @@ mod tests {
             .iter()
             .any(|v| v.contains("ip") || v.contains("number")));
     }
+
+    #[test]
+    fn test_learn_from_empty_samples_returns_match_all() {
+        let (pattern, variables) = PatternLearner::learn_from_samples(&[]);
+        assert_eq!(pattern, ".*");
+        assert!(variables.is_empty());
+    }
+
+    #[test]
+    fn test_learn_from_single_sample_extracts_ip() {
+        let (pattern, variables) =
+            PatternLearner::learn_from_samples(&["client 10.0.0.5 connected".to_string()]);
+        // Single-sample heuristics specifically catch IPs.
+        assert!(variables.iter().any(|v| v == "ip_address"));
+        assert!(pattern.contains(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"));
+    }
+
+    #[test]
+    fn test_learn_from_single_sample_no_ip_falls_back_to_escaped_literal() {
+        let (pattern, variables) =
+            PatternLearner::learn_from_samples(&["start of system".to_string()]);
+        // No detectable variables → entire sample becomes a literal regex.
+        assert!(variables.is_empty());
+        assert_eq!(pattern, regex::escape("start of system"));
+    }
+
+    #[test]
+    fn test_all_identical_samples_have_no_variables() {
+        let s = "system started successfully";
+        let (pattern, variables) =
+            PatternLearner::learn_from_samples(&[s.to_string(), s.to_string(), s.to_string()]);
+        assert!(variables.is_empty());
+        assert!(pattern.contains("system"));
+    }
+
+    #[test]
+    fn test_detect_hex_number_via_alpha_only_tokens() {
+        // tokenize() splits on letter/digit boundaries, so to exercise the
+        // HexNumber branch we need varying tokens that are pure-alpha but
+        // entirely valid hex digits. Real-world inputs that hit this:
+        // short MAC fragments, function-name-like hex codes.
+        let samples = vec![
+            "crash code abc here".to_string(),
+            "crash code def here".to_string(),
+            "crash code fee here".to_string(),
+        ];
+        let (pattern, variables) = PatternLearner::learn_from_samples(&samples);
+        assert!(variables.iter().any(|v| v.starts_with("hex_number")));
+        assert!(pattern.contains("[0-9a-fA-F]"));
+    }
+
+    #[test]
+    fn test_distinct_variables_get_unique_names() {
+        // Two number-typed variables in the same pattern must produce
+        // distinct variable names (number, number_2). Otherwise downstream
+        // template-extraction code can't tell them apart.
+        let samples = vec![
+            "took 100 ms processed 200 events".to_string(),
+            "took 250 ms processed 300 events".to_string(),
+            "took 50 ms processed 80 events".to_string(),
+        ];
+        let (_pattern, variables) = PatternLearner::learn_from_samples(&samples);
+        let number_count = variables.iter().filter(|v| v.starts_with("number")).count();
+        // At least two distinct number variables — names must differ.
+        assert!(number_count >= 2, "got variables: {variables:?}");
+        let unique_names: std::collections::HashSet<_> = variables.iter().collect();
+        assert_eq!(unique_names.len(), variables.len(), "duplicate variable names: {variables:?}");
+    }
 }

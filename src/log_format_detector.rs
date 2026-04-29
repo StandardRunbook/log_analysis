@@ -137,4 +137,75 @@ mod tests {
         assert_eq!(components.pid, None);
         assert_eq!(components.message, "PCI: Using configuration type 1");
     }
+
+    #[test]
+    fn test_detect_iso_timestamp() {
+        // ISO 8601 with T separator and with space separator both count
+        for log in [
+            "2024-01-15T10:30:45 something happened",
+            "2024-01-15 10:30:45 INFO start",
+        ] {
+            assert_eq!(LogFormatDetector::detect(log), LogFormat::ISOTimestamp);
+        }
+    }
+
+    #[test]
+    fn test_detect_csv_delimited() {
+        // ≥ 3 commas → CSV
+        let log = "field1,field2,field3,field4";
+        assert_eq!(
+            LogFormatDetector::detect(log),
+            LogFormat::CustomDelimited { delimiter: ',' }
+        );
+    }
+
+    #[test]
+    fn test_detect_pipe_delimited() {
+        let log = "a|b|c|d|e";
+        assert_eq!(
+            LogFormatDetector::detect(log),
+            LogFormat::CustomDelimited { delimiter: '|' }
+        );
+    }
+
+    #[test]
+    fn test_detect_tab_delimited() {
+        let log = "a\tb\tc\td";
+        assert_eq!(
+            LogFormatDetector::detect(log),
+            LogFormat::CustomDelimited { delimiter: '\t' }
+        );
+    }
+
+    #[test]
+    fn test_detect_semicolon_delimited() {
+        let log = "a;b;c;d";
+        assert_eq!(
+            LogFormatDetector::detect(log),
+            LogFormat::CustomDelimited { delimiter: ';' }
+        );
+    }
+
+    #[test]
+    fn test_detect_unstructured_falls_through() {
+        // Plain prose with no consistent delimiter and no recognizable
+        // timestamp lands as Unstructured.
+        let log = "this is just a sentence";
+        assert_eq!(LogFormatDetector::detect(log), LogFormat::Unstructured);
+    }
+
+    #[test]
+    fn test_detect_delimiter_threshold_is_three() {
+        // Two commas isn't enough; the function requires ≥ 3.
+        let log = "a,b,c";
+        assert_eq!(LogFormatDetector::detect(log), LogFormat::Unstructured);
+    }
+
+    #[test]
+    fn test_extract_syslog_returns_none_for_non_syslog() {
+        // The extractor only succeeds when the line actually matches the
+        // syslog shape. Garbage input → None.
+        assert!(LogFormatDetector::extract_syslog_components("just random text").is_none());
+        assert!(LogFormatDetector::extract_syslog_components("").is_none());
+    }
 }

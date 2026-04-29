@@ -1,0 +1,27 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+
+# Don't penalize the report for files that are inherently hard to unit-test
+# (entry-point binaries, integration adapters, benchmark drivers). The
+# library code is what matters for correctness; the binaries are thin glue
+# that's exercised by the e2e perf tests and by manually running them.
+ignore:
+  - "src/bin/**"
+  - "src/benchmark_runner.rs"
+  - "src/traits.rs"
+  - "src/implementations.rs"
+  - "examples/**"
+  - "tests/**"
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: false
