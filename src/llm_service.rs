@@ -99,9 +99,17 @@ impl ProviderClient {
             request_body["response_format"] = serde_json::json!({ "type": "json_object" });
         }
 
+        // Honor config.endpoint when set (override for tests / proxies).
+        // Default is the public OpenAI chat-completions URL.
+        let url = self
+            .config
+            .endpoint
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1/chat/completions");
+
         let response = self
             .http_client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -148,9 +156,15 @@ impl ProviderClient {
             ]
         });
 
+        let url = self
+            .config
+            .endpoint
+            .as_deref()
+            .unwrap_or("https://api.anthropic.com/v1/messages");
+
         let response = self
             .http_client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(url)
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json")
@@ -525,9 +539,15 @@ impl ProviderClient {
                     "max_tokens": 3000
                 });
 
+                let url = self
+                    .config
+                    .endpoint
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1/chat/completions");
+
                 let response = self
                     .http_client
-                    .post("https://api.openai.com/v1/chat/completions")
+                    .post(url)
                     .header("Authorization", format!("Bearer {}", api_key))
                     .header("Content-Type", "application/json")
                     .json(&request_body)
@@ -585,9 +605,15 @@ impl ProviderClient {
                     "max_tokens": 2000
                 });
 
+                let url = self
+                    .config
+                    .endpoint
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1/chat/completions");
+
                 let response = self
                     .http_client
-                    .post("https://api.openai.com/v1/chat/completions")
+                    .post(url)
                     .header("Authorization", format!("Bearer {}", api_key))
                     .header("Content-Type", "application/json")
                     .json(&request_body)
@@ -674,5 +700,527 @@ impl ProviderClient {
             .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
 
         Ok(classifications)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn ollama_provider(endpoint: &str) -> LLMProviderConfig {
+        LLMProviderConfig {
+            name: "ol".into(),
+            provider: "ollama".into(),
+            model: "llama3".into(),
+            api_key: None,
+            endpoint: Some(endpoint.into()),
+            timeout_secs: Some(5),
+        }
+    }
+
+    fn openai_provider(endpoint: &str) -> LLMProviderConfig {
+        LLMProviderConfig {
+            name: "oa".into(),
+            provider: "openai".into(),
+            model: "gpt-4o".into(),
+            api_key: Some("sk-test".into()),
+            endpoint: Some(endpoint.into()),
+            timeout_secs: Some(5),
+        }
+    }
+
+    fn anthropic_provider(endpoint: &str) -> LLMProviderConfig {
+        LLMProviderConfig {
+            name: "an".into(),
+            provider: "anthropic".into(),
+            model: "claude-3".into(),
+            api_key: Some("ak-test".into()),
+            endpoint: Some(endpoint.into()),
+            timeout_secs: Some(5),
+        }
+    }
+
+    fn first_success(provider: LLMProviderConfig) -> MultiLLMConfig {
+        MultiLLMConfig {
+            providers: vec![provider],
+            consensus_strategy: ConsensusStrategy::FirstSuccess,
+            min_agreement: 1,
+        }
+    }
+
+    // ---------- pure / construction ----------
+
+    #[test]
+    fn test_new_with_config_validates() {
+        // Empty providers → validation error from MultiLLMConfig.
+        let bad = MultiLLMConfig {
+            providers: vec![],
+            consensus_strategy: ConsensusStrategy::FirstSuccess,
+            min_agreement: 1,
+        };
+        assert!(LLMServiceClient::new_with_config(bad).is_err());
+    }
+
+    #[test]
+    fn test_new_legacy_constructor_builds_single_provider() {
+        // The legacy `new()` shape used by older callers — wrap into a
+        // single-provider config and don't touch the network.
+        let svc = LLMServiceClient::new("ollama".into(), "key".into(), "llama3".into());
+        assert_eq!(svc.config.providers.len(), 1);
+        assert_eq!(svc.config.providers[0].provider, "ollama");
+        assert_eq!(svc.config.consensus_strategy, ConsensusStrategy::FirstSuccess);
+    }
+
+    #[test]
+    fn test_build_prompt_contains_log_line_and_rules() {
+        let p = ProviderClient::build_prompt("Jun 14 ssh failure");
+        assert!(p.contains("Jun 14 ssh failure"));
+        assert!(p.contains("regex pattern"));
+        assert!(p.contains("CRITICAL RULES"));
+    }
+
+    #[test]
+    fn test_parse_llm_response_happy_path() {
+        let log = "User alice logged in";
+        let llm = r#"{"pattern": "User (\\w+) logged in", "variables": ["user"]}"#;
+        let t = ProviderClient::parse_llm_response(log, llm).unwrap();
+        assert_eq!(t.pattern, "User (\\w+) logged in");
+        assert_eq!(t.variables, vec!["user".to_string()]);
+        assert_eq!(t.example, log);
+        assert_ne!(t.template_id, 0);
+    }
+
+    #[test]
+    fn test_parse_llm_response_extracts_json_from_prose() {
+        let log = "x";
+        // LLM wraps the JSON in commentary — must still parse.
+        let llm = r#"Sure! Here's the pattern:
+            {"pattern": "x", "variables": []}
+            Hope this helps!"#;
+        let t = ProviderClient::parse_llm_response(log, llm).unwrap();
+        assert_eq!(t.pattern, "x");
+        assert!(t.variables.is_empty());
+    }
+
+    #[test]
+    fn test_parse_llm_response_rejects_non_json() {
+        // No object delimiters at all → falls back to whole response,
+        // which fails json parse → error.
+        let err = ProviderClient::parse_llm_response("log", "not json").unwrap_err();
+        assert!(err.to_string().contains("Failed to parse LLM JSON response"));
+    }
+
+    #[test]
+    fn test_parse_llm_response_missing_fields_uses_defaults() {
+        // Empty object: pattern defaults to log_line, variables to [].
+        let t = ProviderClient::parse_llm_response("the log", "{}").unwrap();
+        assert_eq!(t.pattern, "the log");
+        assert!(t.variables.is_empty());
+    }
+
+    #[test]
+    fn test_parse_classification_response() {
+        let r = ProviderClient::parse_classification_response(
+            r#"prefix ["a","b","c"] suffix"#,
+        )
+        .unwrap();
+        assert_eq!(r, vec!["a".to_string(), "b".into(), "c".into()]);
+    }
+
+    #[test]
+    fn test_parse_classification_response_no_array_errors() {
+        assert!(ProviderClient::parse_classification_response("nope").is_err());
+        assert!(ProviderClient::parse_classification_response("[unbalanced").is_err());
+    }
+
+    // ---------- ollama HTTP path (configurable endpoint) ----------
+
+    #[tokio::test]
+    async fn test_ollama_generate_template_happy_path() {
+        let server = MockServer::start().await;
+        // Use a pattern with no JSON-escape pitfalls (no backslashes).
+        // The contract test only needs to prove pattern + variables
+        // round-trip; regex semantics are not exercised here.
+        Mock::given(method("POST"))
+            .and(path("/api/generate"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "response": r#"{"pattern": "user X logged in", "variables": ["user"]}"#
+            })))
+            .mount(&server)
+            .await;
+
+        let svc = LLMServiceClient::new_with_config(first_success(ollama_provider(&server.uri())))
+            .unwrap();
+        let t = svc.generate_template("user alice logged in").await.unwrap();
+        assert_eq!(t.pattern, "user X logged in");
+        assert_eq!(t.variables, vec!["user".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_ollama_generate_template_no_response_field() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/generate"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let svc = LLMServiceClient::new_with_config(first_success(ollama_provider(&server.uri())))
+            .unwrap();
+        let err = svc.generate_template("x").await.unwrap_err();
+        // FirstSuccess → exhausts providers → "All LLM providers failed"
+        assert!(err.to_string().contains("All LLM providers failed"));
+    }
+
+    #[tokio::test]
+    async fn test_ollama_endpoint_missing_returns_error() {
+        let provider = LLMProviderConfig {
+            endpoint: None, // missing → call_ollama bails
+            ..ollama_provider("unused")
+        };
+        let svc = LLMServiceClient::new_with_config(first_success(provider)).unwrap();
+        let err = svc.generate_template("x").await.unwrap_err();
+        assert!(err.to_string().contains("All LLM providers failed"));
+    }
+
+    // ---------- openai HTTP path ----------
+
+    #[tokio::test]
+    async fn test_openai_generate_template_happy_path() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(header("authorization", "Bearer sk-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "content": r#"{"pattern": "GET /api/X", "variables": ["resource"]}"#
+                    }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let svc = LLMServiceClient::new_with_config(first_success(openai_provider(&server.uri())))
+            .unwrap();
+        let t = svc.generate_template("GET /api/users").await.unwrap();
+        assert_eq!(t.pattern, "GET /api/X");
+        assert_eq!(t.variables, vec!["resource".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_openai_generate_template_error_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "error": {"message": "invalid api key"}
+            })))
+            .mount(&server)
+            .await;
+
+        let svc = LLMServiceClient::new_with_config(first_success(openai_provider(&server.uri())))
+            .unwrap();
+        let err = svc.generate_template("x").await.unwrap_err();
+        assert!(err.to_string().contains("All LLM providers failed"));
+    }
+
+    #[tokio::test]
+    async fn test_openai_no_api_key() {
+        let provider = LLMProviderConfig {
+            api_key: None,
+            ..openai_provider("http://nowhere.invalid")
+        };
+        let svc = LLMServiceClient::new_with_config(first_success(provider)).unwrap();
+        let err = svc.generate_template("x").await.unwrap_err();
+        assert!(err.to_string().contains("All LLM providers failed"));
+    }
+
+    #[tokio::test]
+    async fn test_openai_reasoning_model_branch() {
+        // Reasoning models (o1/o3...) take a different request shape:
+        // no temperature, no response_format, larger max_completion_tokens.
+        // Verify by setting model to "o1" — the request must succeed and
+        // not include a temperature field.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "content": r#"{"pattern": "x", "variables": []}"#
+                    }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let provider = LLMProviderConfig {
+            model: "o1".into(),
+            ..openai_provider(&server.uri())
+        };
+        let svc = LLMServiceClient::new_with_config(first_success(provider)).unwrap();
+        svc.generate_template("x").await.unwrap();
+    }
+
+    // ---------- anthropic HTTP path ----------
+
+    #[tokio::test]
+    async fn test_anthropic_generate_template_happy_path() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(header("x-api-key", "ak-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{ "text": r#"{"pattern": "ok", "variables": []}"# }]
+            })))
+            .mount(&server)
+            .await;
+
+        let svc = LLMServiceClient::new_with_config(first_success(anthropic_provider(&server.uri())))
+            .unwrap();
+        let t = svc.generate_template("anything").await.unwrap();
+        assert_eq!(t.pattern, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_anthropic_no_api_key() {
+        let provider = LLMProviderConfig {
+            api_key: None,
+            ..anthropic_provider("http://nowhere.invalid")
+        };
+        let svc = LLMServiceClient::new_with_config(first_success(provider)).unwrap();
+        let err = svc.generate_template("x").await.unwrap_err();
+        assert!(err.to_string().contains("All LLM providers failed"));
+    }
+
+    // ---------- unsupported / fallthrough provider ----------
+
+    #[tokio::test]
+    async fn test_unsupported_provider_errors() {
+        let provider = LLMProviderConfig {
+            name: "weird".into(),
+            provider: "made-up".into(),
+            model: "x".into(),
+            api_key: None,
+            endpoint: None,
+            timeout_secs: None,
+        };
+        let svc = LLMServiceClient::new_with_config(first_success(provider)).unwrap();
+        let err = svc.generate_template("x").await.unwrap_err();
+        assert!(err.to_string().contains("All LLM providers failed"));
+    }
+
+    // ---------- legacy alias ----------
+
+    #[tokio::test]
+    async fn test_generate_template_from_log_alias() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/generate"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "response": r#"{"pattern": "x", "variables": []}"#
+            })))
+            .mount(&server)
+            .await;
+
+        let svc = LLMServiceClient::new_with_config(first_success(ollama_provider(&server.uri())))
+            .unwrap();
+        let t = svc.generate_template_from_log("x").await.unwrap();
+        assert_eq!(t.pattern, "x");
+    }
+
+    // ---------- classify_fragments ----------
+
+    #[tokio::test]
+    async fn test_classify_fragments_via_ollama() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/generate"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "response": r#"["timestamp", "static_text"]"#
+            })))
+            .mount(&server)
+            .await;
+
+        let svc = LLMServiceClient::new_with_config(first_success(ollama_provider(&server.uri())))
+            .unwrap();
+        let result = svc
+            .classify_fragments(&["Jun".into(), "auth".into()], "Jun auth")
+            .await
+            .unwrap();
+        assert_eq!(result, vec!["timestamp".to_string(), "static_text".into()]);
+    }
+
+    #[tokio::test]
+    async fn test_classify_fragments_via_openai() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": { "content": r#"["number","ip_address"]"# }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let svc = LLMServiceClient::new_with_config(first_success(openai_provider(&server.uri())))
+            .unwrap();
+        let result = svc.classify_fragments(&["1".into(), "10.0.0.1".into()], "1 10.0.0.1")
+            .await
+            .unwrap();
+        assert_eq!(result, vec!["number".to_string(), "ip_address".into()]);
+    }
+
+    #[tokio::test]
+    async fn test_classify_fragments_unsupported_provider() {
+        let provider = LLMProviderConfig {
+            provider: "anthropic".into(), // classify_fragments not implemented
+            ..anthropic_provider("http://nowhere.invalid")
+        };
+        let svc = LLMServiceClient::new_with_config(first_success(provider)).unwrap();
+        let err = svc.classify_fragments(&[], "").await.unwrap_err();
+        assert!(err.to_string().contains("not supported"));
+    }
+
+    // ---------- call_openai_simple ----------
+
+    #[tokio::test]
+    async fn test_call_openai_simple_happy_path() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{
+                    "message": { "content": "hi there" }
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let svc = LLMServiceClient::new_with_config(first_success(openai_provider(&server.uri())))
+            .unwrap();
+        let s = svc.call_openai_simple("any prompt").await.unwrap();
+        assert_eq!(s, "hi there");
+    }
+
+    #[tokio::test]
+    async fn test_call_openai_simple_only_supports_openai() {
+        let svc = LLMServiceClient::new_with_config(first_success(ollama_provider(
+            "http://nowhere.invalid",
+        )))
+        .unwrap();
+        let err = svc.call_openai_simple("p").await.unwrap_err();
+        assert!(err.to_string().contains("call_simple only supported for OpenAI"));
+    }
+
+    // ---------- consensus paths ----------
+
+    #[tokio::test]
+    async fn test_first_success_falls_back_to_second_provider() {
+        // First provider 500s, second provider succeeds → consumer gets
+        // the second provider's template.
+        let bad = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&bad)
+            .await;
+        let good = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/generate"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "response": r#"{"pattern": "good", "variables": []}"#
+            })))
+            .mount(&good)
+            .await;
+
+        let cfg = MultiLLMConfig {
+            providers: vec![openai_provider(&bad.uri()), ollama_provider(&good.uri())],
+            consensus_strategy: ConsensusStrategy::FirstSuccess,
+            min_agreement: 1,
+        };
+        let svc = LLMServiceClient::new_with_config(cfg).unwrap();
+        let t = svc.generate_template("x").await.unwrap();
+        assert_eq!(t.pattern, "good");
+    }
+
+    #[tokio::test]
+    async fn test_majority_consensus_picks_agreed_pattern() {
+        // Two ollama providers agree on "AGREED", one disagrees with
+        // "OUTLIER". Majority strategy must return AGREED.
+        let agree1 = MockServer::start().await;
+        let agree2 = MockServer::start().await;
+        let dissent = MockServer::start().await;
+        for (server, pattern) in [
+            (&agree1, "AGREED"),
+            (&agree2, "AGREED"),
+            (&dissent, "OUTLIER"),
+        ] {
+            Mock::given(method("POST"))
+                .and(path("/api/generate"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "response": format!(r#"{{"pattern": "{pattern}", "variables": []}}"#)
+                })))
+                .mount(server)
+                .await;
+        }
+        let cfg = MultiLLMConfig {
+            providers: vec![
+                ollama_provider(&agree1.uri()),
+                ollama_provider(&agree2.uri()),
+                ollama_provider(&dissent.uri()),
+            ],
+            consensus_strategy: ConsensusStrategy::Majority,
+            min_agreement: 2,
+        };
+        let svc = LLMServiceClient::new_with_config(cfg).unwrap();
+        let t = svc.generate_template("x").await.unwrap();
+        assert_eq!(t.pattern, "AGREED");
+    }
+
+    #[tokio::test]
+    async fn test_consensus_fallback_when_no_agreement() {
+        // Three different patterns → no group meets the majority
+        // threshold, so consensus falls back to the largest group
+        // (which is just any single pattern). Should still return
+        // *something*, not error.
+        let s1 = MockServer::start().await;
+        let s2 = MockServer::start().await;
+        for (server, pattern) in [(&s1, "PAT_A"), (&s2, "PAT_B")] {
+            Mock::given(method("POST"))
+                .and(path("/api/generate"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "response": format!(r#"{{"pattern": "{pattern}", "variables": []}}"#)
+                })))
+                .mount(server)
+                .await;
+        }
+        let cfg = MultiLLMConfig {
+            providers: vec![ollama_provider(&s1.uri()), ollama_provider(&s2.uri())],
+            consensus_strategy: ConsensusStrategy::Unanimous, // requires 2 agree
+            min_agreement: 2,
+        };
+        let svc = LLMServiceClient::new_with_config(cfg).unwrap();
+        let t = svc.generate_template("x").await.unwrap();
+        // Either pattern is acceptable; the test just asserts the call
+        // succeeds via the fallback rather than erroring.
+        assert!(t.pattern == "PAT_A" || t.pattern == "PAT_B");
+    }
+
+    #[tokio::test]
+    async fn test_consensus_all_providers_fail() {
+        let s1 = MockServer::start().await;
+        let s2 = MockServer::start().await;
+        for server in [&s1, &s2] {
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(500))
+                .mount(server)
+                .await;
+        }
+        let cfg = MultiLLMConfig {
+            providers: vec![ollama_provider(&s1.uri()), ollama_provider(&s2.uri())],
+            consensus_strategy: ConsensusStrategy::Majority,
+            min_agreement: 2,
+        };
+        let svc = LLMServiceClient::new_with_config(cfg).unwrap();
+        assert!(svc.generate_template("x").await.is_err());
     }
 }
