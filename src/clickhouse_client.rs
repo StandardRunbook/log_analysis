@@ -3,9 +3,9 @@
 //! Provides high-performance log ingestion and querying using ClickHouse
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use clickhouse::Client;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Deserialize, clickhouse::Row)]
 pub struct LogEntry {
@@ -61,9 +61,7 @@ pub struct ClickHouseClient {
 impl ClickHouseClient {
     /// Create a new ClickHouse client
     pub fn new(url: &str) -> Result<Self> {
-        let mut client = Client::default()
-            .with_url(url)
-            .with_database("default");
+        let mut client = Client::default().with_url(url).with_database("default");
 
         // Add authentication if credentials are provided via environment
         if let Ok(user) = std::env::var("CLICKHOUSE_USER") {
@@ -76,7 +74,10 @@ impl ClickHouseClient {
             client = client.with_database(database);
         }
 
-        Ok(Self { client, url: url.to_string() })
+        Ok(Self {
+            client,
+            url: url.to_string(),
+        })
     }
 
     /// Initialize database schema
@@ -122,7 +123,8 @@ impl ClickHouseClient {
         }
 
         // Use HTTP JSON format instead of binary Row format (more reliable)
-        let json_lines: Vec<String> = logs.iter()
+        let json_lines: Vec<String> = logs
+            .iter()
             .map(|log| serde_json::to_string(log).unwrap())
             .collect();
         let body = json_lines.join("\n");
@@ -155,8 +157,10 @@ impl ClickHouseClient {
         let start_str = start_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
         let end_str = end_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
-        let logs = self.client
-            .query("
+        let logs = self
+            .client
+            .query(
+                "
                 SELECT
                     org_id, log_stream_id, service, region, log_stream_name,
                     timestamp, template_id, message
@@ -167,7 +171,8 @@ impl ClickHouseClient {
                   AND timestamp <= parseDateTime64BestEffort(?)
                 ORDER BY timestamp DESC
                 LIMIT 10000
-            ")
+            ",
+            )
             .bind(org_id)
             .bind(log_stream_id)
             .bind(start_str)
@@ -196,8 +201,10 @@ impl ClickHouseClient {
         let start_str = start_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
         let end_str = end_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
-        let groups = self.client
-            .query("
+        let groups = self
+            .client
+            .query(
+                "
                 SELECT
                     template_id,
                     count() as log_count,
@@ -210,7 +217,8 @@ impl ClickHouseClient {
                 GROUP BY template_id
                 ORDER BY log_count DESC
                 LIMIT 20
-            ")
+            ",
+            )
             .bind(org_id)
             .bind(log_stream_id)
             .bind(start_str)
@@ -218,12 +226,15 @@ impl ClickHouseClient {
             .fetch_all::<GroupRow>()
             .await?;
 
-        Ok(groups.into_iter().map(|g| LogGroup {
-            template_id: g.template_id,
-            log_count: g.log_count,
-            sample_messages: g.sample_messages,
-            relative_change: 0.0, // TODO: Calculate from baseline
-        }).collect())
+        Ok(groups
+            .into_iter()
+            .map(|g| LogGroup {
+                template_id: g.template_id,
+                log_count: g.log_count,
+                sample_messages: g.sample_messages,
+                relative_change: 0.0, // TODO: Calculate from baseline
+            })
+            .collect())
     }
 
     /// Store template and return the assigned template_id
@@ -235,8 +246,7 @@ impl ClickHouseClient {
     /// from any current call site.
     pub async fn insert_template(&self, mut template: TemplateRow) -> Result<u64> {
         if template.template_id == 0 {
-            template.template_id =
-                crate::template_id::template_id_from_pattern(&template.pattern);
+            template.template_id = crate::template_id::template_id_from_pattern(&template.pattern);
         }
 
         // Use HTTP JSON format (JSONEachRow) rather than the clickhouse-rs
@@ -262,7 +272,10 @@ impl ClickHouseClient {
             pattern: &template.pattern,
             variables: &template.variables,
             example: &template.example,
-            created_at: template.created_at.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+            created_at: template
+                .created_at
+                .format("%Y-%m-%d %H:%M:%S%.3f")
+                .to_string(),
         })?;
 
         let http_client = reqwest::Client::new();
@@ -291,7 +304,8 @@ impl ClickHouseClient {
             max_id: u64,
         }
 
-        let result = self.client
+        let result = self
+            .client
             .query("SELECT COALESCE(max(template_id), 0) as max_id FROM templates")
             .fetch_one::<MaxIdRow>()
             .await?;
@@ -315,7 +329,11 @@ impl ClickHouseClient {
     }
 
     /// Get templates for a specific org and log stream
-    pub async fn get_templates_for_stream(&self, org_id: &str, log_stream_id: &str) -> Result<Vec<TemplateRow>> {
+    pub async fn get_templates_for_stream(
+        &self,
+        org_id: &str,
+        log_stream_id: &str,
+    ) -> Result<Vec<TemplateRow>> {
         let templates = self.client
             .query("SELECT org_id, log_stream_id, template_id, pattern, variables, example, created_at FROM templates WHERE org_id = ? AND log_stream_id = ? ORDER BY template_id")
             .bind(org_id)
@@ -328,7 +346,10 @@ impl ClickHouseClient {
 
     /// Clear all templates from the database
     pub async fn clear_templates(&self) -> Result<()> {
-        self.client.query("TRUNCATE TABLE templates").execute().await?;
+        self.client
+            .query("TRUNCATE TABLE templates")
+            .execute()
+            .await?;
         Ok(())
     }
 }
@@ -371,7 +392,12 @@ mod tests {
         client.insert_log(log.clone()).await.unwrap();
 
         let logs = client
-            .query_logs("org-1", "stream-1", Utc::now() - chrono::Duration::hours(1), Utc::now())
+            .query_logs(
+                "org-1",
+                "stream-1",
+                Utc::now() - chrono::Duration::hours(1),
+                Utc::now(),
+            )
             .await
             .unwrap();
 

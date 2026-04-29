@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --example multi_llm_test
 
-use log_analyzer::llm_config::{MultiLLMConfig, LLMProviderConfig, ConsensusStrategy};
+use log_analyzer::llm_config::{ConsensusStrategy, LLMProviderConfig, MultiLLMConfig};
 use log_analyzer::llm_service::LLMServiceClient;
 
 #[tokio::main]
@@ -12,16 +12,14 @@ async fn main() -> anyhow::Result<()> {
     // Example 1: Single provider (backward compatible)
     println!("\n=== Example 1: Single Provider ===");
     let single_config = MultiLLMConfig {
-        providers: vec![
-            LLMProviderConfig {
-                name: "local-ollama".to_string(),
-                provider: "ollama".to_string(),
-                model: "llama3".to_string(),
-                api_key: None,
-                endpoint: Some("http://localhost:11434".to_string()),
-                timeout_secs: Some(60),
-            }
-        ],
+        providers: vec![LLMProviderConfig {
+            name: "local-ollama".to_string(),
+            provider: "ollama".to_string(),
+            model: "llama3".to_string(),
+            api_key: None,
+            endpoint: Some("http://localhost:11434".to_string()),
+            timeout_secs: Some(60),
+        }],
         consensus_strategy: ConsensusStrategy::FirstSuccess,
         min_agreement: 1,
     };
@@ -60,7 +58,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Example 3: Test template generation (if Ollama is running)
     println!("\n=== Example 3: Test Template Generation ===");
-    let test_log = "2024-01-15 10:30:45 ERROR Connection timeout after 5000ms to host 192.168.1.100";
+    let test_log =
+        "2024-01-15 10:30:45 ERROR Connection timeout after 5000ms to host 192.168.1.100";
 
     println!("Generating template for: {}", test_log);
     match client.generate_template(test_log).await {

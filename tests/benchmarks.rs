@@ -135,7 +135,13 @@ fn get_cached_datasets() -> Vec<String> {
 fn capitalize(s: &str) -> String {
     s.chars()
         .enumerate()
-        .map(|(i, c)| if i == 0 { c.to_uppercase().to_string() } else { c.to_string() })
+        .map(|(i, c)| {
+            if i == 0 {
+                c.to_uppercase().to_string()
+            } else {
+                c.to_string()
+            }
+        })
         .collect()
 }
 
@@ -234,9 +240,8 @@ fn save_results(summary: &BenchmarkSummary) -> anyhow::Result<()> {
     println!("\n💾 Results saved to: {}", json_file);
 
     // Save CSV
-    let mut csv = String::from(
-        "Dataset,Templates,Logs,Matched,MatchRate,Throughput,LatencyUs,Accuracy\n",
-    );
+    let mut csv =
+        String::from("Dataset,Templates,Logs,Matched,MatchRate,Throughput,LatencyUs,Accuracy\n");
     for r in &summary.results {
         csv.push_str(&format!(
             "{},{},{},{},{:.2},{:.0},{:.1},{:.2}\n",
@@ -302,7 +307,11 @@ async fn throughput() -> anyhow::Result<()> {
         let dataset = LogHubDatasetLoader::new(dataset_name, "data/loghub");
         let logs = dataset.load_raw_logs()?;
 
-        println!("\n{} ({}templates):", dataset_name, matcher.get_all_templates().len());
+        println!(
+            "\n{} ({}templates):",
+            dataset_name,
+            matcher.get_all_templates().len()
+        );
         println!("  {:>8} {:>15} {:>12}", "Logs", "Throughput", "Latency");
         println!("  {:-<40}", "");
 
@@ -353,8 +362,8 @@ async fn parallel() -> anyhow::Result<()> {
 
     let results: Vec<DatasetResult> = datasets
         .par_iter()
-        .filter_map(|dataset| {
-            match benchmark_single_dataset_cached(dataset, Some(500)) {
+        .filter_map(
+            |dataset| match benchmark_single_dataset_cached(dataset, Some(500)) {
                 Ok(r) => {
                     println!(
                         "✅ {} - {:.0} logs/sec, {:.2}% accuracy",
@@ -366,12 +375,17 @@ async fn parallel() -> anyhow::Result<()> {
                     println!("❌ {} - Error: {}", dataset, e);
                     None
                 }
-            }
-        })
+            },
+        )
         .collect();
 
     let total_time = start.elapsed().as_secs_f64();
-    print_summary_with_time("parallel", &results, total_time, Some(rayon::current_num_threads()));
+    print_summary_with_time(
+        "parallel",
+        &results,
+        total_time,
+        Some(rayon::current_num_threads()),
+    );
 
     Ok(())
 }
@@ -464,25 +478,28 @@ async fn ultra() -> anyhow::Result<()> {
 
     let results: Vec<DatasetResult> = datasets
         .par_iter()
-        .filter_map(|dataset| {
-            match benchmark_single_dataset_ultra(dataset) {
-                Ok(r) => {
-                    println!(
-                        "✅ {} - {:.0} logs/sec, {:.2}% accuracy ({} logs)",
-                        dataset, r.throughput, r.grouping_accuracy, r.total_logs
-                    );
-                    Some(r)
-                }
-                Err(e) => {
-                    println!("❌ {} - Error: {}", dataset, e);
-                    None
-                }
+        .filter_map(|dataset| match benchmark_single_dataset_ultra(dataset) {
+            Ok(r) => {
+                println!(
+                    "✅ {} - {:.0} logs/sec, {:.2}% accuracy ({} logs)",
+                    dataset, r.throughput, r.grouping_accuracy, r.total_logs
+                );
+                Some(r)
+            }
+            Err(e) => {
+                println!("❌ {} - Error: {}", dataset, e);
+                None
             }
         })
         .collect();
 
     let total_time = start.elapsed().as_secs_f64();
-    print_summary_with_time("ultra", &results, total_time, Some(rayon::current_num_threads()));
+    print_summary_with_time(
+        "ultra",
+        &results,
+        total_time,
+        Some(rayon::current_num_threads()),
+    );
 
     Ok(())
 }
@@ -536,14 +553,22 @@ async fn mixed() -> anyhow::Result<()> {
 
     for (dataset_name, matcher, _) in &all_data {
         let templates = matcher.get_all_templates();
-        println!("  Adding {} templates from {}", templates.len(), dataset_name);
+        println!(
+            "  Adding {} templates from {}",
+            templates.len(),
+            dataset_name
+        );
         for template in templates {
             combined_matcher.add_template(template);
         }
         template_count += matcher.get_all_templates().len();
     }
 
-    println!("\n📊 Combined matcher: {} templates from {} sources\n", template_count, all_data.len());
+    println!(
+        "\n📊 Combined matcher: {} templates from {} sources\n",
+        template_count,
+        all_data.len()
+    );
 
     // Interleave logs from all sources (round-robin)
     let mut interleaved_logs = Vec::new();
@@ -557,8 +582,16 @@ async fn mixed() -> anyhow::Result<()> {
         }
     }
 
-    println!("🔀 Interleaved {} logs from {} sources", interleaved_logs.len(), all_data.len());
-    let pattern_names: Vec<&str> = all_data.iter().map(|(name, _, _)| name.as_str()).take(4).collect();
+    println!(
+        "🔀 Interleaved {} logs from {} sources",
+        interleaved_logs.len(),
+        all_data.len()
+    );
+    let pattern_names: Vec<&str> = all_data
+        .iter()
+        .map(|(name, _, _)| name.as_str())
+        .take(4)
+        .collect();
     println!("   Pattern: {}, ...\n", pattern_names.join(", "));
 
     // Test 1: Sequential processing
@@ -577,7 +610,10 @@ async fn mixed() -> anyhow::Result<()> {
 
     println!("  Throughput: {:.0} logs/sec", throughput_seq);
     println!("  Latency:    {:.2}μs per log", latency_seq);
-    println!("  Match rate: {:.1}%", (matched_seq as f64 / interleaved_logs.len() as f64) * 100.0);
+    println!(
+        "  Match rate: {:.1}%",
+        (matched_seq as f64 / interleaved_logs.len() as f64) * 100.0
+    );
 
     // Test 2: Parallel batch processing
     println!("\n🔹 Parallel batch processing:");
@@ -590,16 +626,25 @@ async fn mixed() -> anyhow::Result<()> {
 
     println!("  Throughput: {:.0} logs/sec", throughput_par);
     println!("  Latency:    {:.2}μs per log", latency_par);
-    println!("  Match rate: {:.1}%", (matched_par as f64 / interleaved_logs.len() as f64) * 100.0);
+    println!(
+        "  Match rate: {:.1}%",
+        (matched_par as f64 / interleaved_logs.len() as f64) * 100.0
+    );
 
     // Comparison
     let speedup = throughput_par / throughput_seq;
     println!("\n📈 Speedup: {:.2}x", speedup);
 
     if speedup > 1.0 {
-        println!("   ✅ Parallel processing is {:.1}% faster", (speedup - 1.0) * 100.0);
+        println!(
+            "   ✅ Parallel processing is {:.1}% faster",
+            (speedup - 1.0) * 100.0
+        );
     } else {
-        println!("   ⚠️  Sequential processing is {:.1}% faster", (1.0 - speedup) * 100.0);
+        println!(
+            "   ⚠️  Sequential processing is {:.1}% faster",
+            (1.0 - speedup) * 100.0
+        );
     }
 
     println!("\n{:=<100}", "");
@@ -666,10 +711,8 @@ fn benchmark_single_dataset_cached(
     let test_gt = &ground_truth[..test_size.min(ground_truth.len())];
 
     let start = Instant::now();
-    let template_assignments: Vec<Option<u64>> = test_logs
-        .iter()
-        .map(|log| matcher.match_log(log))
-        .collect();
+    let template_assignments: Vec<Option<u64>> =
+        test_logs.iter().map(|log| matcher.match_log(log)).collect();
     let elapsed = start.elapsed();
 
     let matched_count = template_assignments.iter().filter(|t| t.is_some()).count();

@@ -37,7 +37,10 @@ fn test_streaming_config() {
     let matcher = LogMatcher::with_config(config);
 
     println!("\nStreaming configuration:");
-    println!("  Optimal batch size: {} (lower latency)", matcher.optimal_batch_size());
+    println!(
+        "  Optimal batch size: {} (lower latency)",
+        matcher.optimal_batch_size()
+    );
 
     assert_eq!(matcher.optimal_batch_size(), 1_000);
 }
@@ -48,7 +51,10 @@ fn test_batch_processing_config() {
     let matcher = LogMatcher::with_config(config);
 
     println!("\nBatch processing configuration:");
-    println!("  Optimal batch size: {} (max throughput)", matcher.optimal_batch_size());
+    println!(
+        "  Optimal batch size: {} (max throughput)",
+        matcher.optimal_batch_size()
+    );
 
     assert_eq!(matcher.optimal_batch_size(), 10_000);
 }
@@ -59,7 +65,10 @@ fn test_bulk_processing_config() {
     let matcher = LogMatcher::with_config(config);
 
     println!("\nBulk processing configuration:");
-    println!("  Optimal batch size: {} (large batches)", matcher.optimal_batch_size());
+    println!(
+        "  Optimal batch size: {} (large batches)",
+        matcher.optimal_batch_size()
+    );
 
     assert_eq!(matcher.optimal_batch_size(), 50_000);
 }
@@ -80,7 +89,10 @@ fn test_config_affects_matching() {
 
     // This should NOT match because "err: " is too short
     let result = matcher.match_log("err: 404");
-    println!("\nWith min_fragment_length=5, 'err: 404' matches: {:?}", result);
+    println!(
+        "\nWith min_fragment_length=5, 'err: 404' matches: {:?}",
+        result
+    );
     // Note: This will be None because the fragment is filtered out
 
     // Now with default config (min_fragment_length=2)
@@ -93,7 +105,10 @@ fn test_config_affects_matching() {
     });
 
     let result_default = matcher_default.match_log("err: 404");
-    println!("With min_fragment_length=2, 'err: 404' matches: {:?}", result_default);
+    println!(
+        "With min_fragment_length=2, 'err: 404' matches: {:?}",
+        result_default
+    );
     assert_eq!(result_default, Some(100));
 }
 

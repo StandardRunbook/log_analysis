@@ -1,8 +1,8 @@
 use anyhow::Result;
 use rustc_hash::FxHashMap;
 
+use crate::llm_config::{ConsensusStrategy, LLMProviderConfig, MultiLLMConfig};
 use crate::log_matcher::LogTemplate;
-use crate::llm_config::{MultiLLMConfig, LLMProviderConfig, ConsensusStrategy};
 
 // Removed unused structs: TemplateGenerationRequest, TemplateExample, TemplateGenerationResponse
 
@@ -29,7 +29,10 @@ impl ProviderClient {
     }
 
     async fn call_ollama(&self, log_line: &str) -> Result<LogTemplate> {
-        let endpoint = self.config.endpoint.as_ref()
+        let endpoint = self
+            .config
+            .endpoint
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Ollama endpoint not configured"))?;
 
         let prompt = Self::build_prompt(log_line);
@@ -44,7 +47,8 @@ impl ProviderClient {
             }
         });
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(format!("{}/api/generate", endpoint))
             .json(&request_body)
             .send()
@@ -60,7 +64,10 @@ impl ProviderClient {
     }
 
     async fn call_openai(&self, log_line: &str) -> Result<LogTemplate> {
-        let api_key = self.config.api_key.as_ref()
+        let api_key = self
+            .config
+            .api_key
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("OpenAI API key not configured"))?;
 
         let prompt = Self::build_prompt(log_line);
@@ -72,11 +79,8 @@ impl ProviderClient {
         // - `response_format: json_object` support has been spotty across o-series
         //   versions; safer to omit and rely on prompt discipline
         let model = &self.config.model;
-        let is_reasoning_model = model.starts_with('o')
-            && model
-                .chars()
-                .nth(1)
-                .is_some_and(|c| c.is_ascii_digit());
+        let is_reasoning_model =
+            model.starts_with('o') && model.chars().nth(1).is_some_and(|c| c.is_ascii_digit());
 
         let mut request_body = serde_json::json!({
             "model": model,
@@ -95,7 +99,8 @@ impl ProviderClient {
             request_body["response_format"] = serde_json::json!({ "type": "json_object" });
         }
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post("https://api.openai.com/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
@@ -124,7 +129,10 @@ impl ProviderClient {
     }
 
     async fn call_anthropic(&self, log_line: &str) -> Result<LogTemplate> {
-        let api_key = self.config.api_key.as_ref()
+        let api_key = self
+            .config
+            .api_key
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Anthropic API key not configured"))?;
 
         let prompt = Self::build_prompt(log_line);
@@ -140,7 +148,8 @@ impl ProviderClient {
             ]
         });
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
@@ -197,7 +206,7 @@ Respond with ONLY the JSON object, no explanation:
             .char_indices()
             .rev()
             .find(|(_, c)| *c == '}')
-            .map(|(i, _)| i + '}'. len_utf8())
+            .map(|(i, _)| i + '}'.len_utf8())
             .unwrap_or(llm_output.len());
 
         let json_str = if json_start < json_end && json_end <= llm_output.len() {
@@ -237,7 +246,11 @@ Respond with ONLY the JSON object, no explanation:
                 })
             }
             Err(e) => {
-                anyhow::bail!("Failed to parse LLM JSON response: {}. Response: {}", e, llm_output)
+                anyhow::bail!(
+                    "Failed to parse LLM JSON response: {}. Response: {}",
+                    e,
+                    llm_output
+                )
             }
         }
     }
@@ -295,8 +308,11 @@ impl LLMServiceClient {
 
     /// Send a log line to multiple LLMs and find consensus
     pub async fn generate_template(&self, log_line: &str) -> Result<LogTemplate> {
-        tracing::debug!("Requesting {} LLM(s) to generate template for: {}",
-                       self.config.providers.len(), log_line);
+        tracing::debug!(
+            "Requesting {} LLM(s) to generate template for: {}",
+            self.config.providers.len(),
+            log_line
+        );
 
         match self.config.consensus_strategy {
             ConsensusStrategy::FirstSuccess => {
@@ -332,29 +348,35 @@ impl LLMServiceClient {
         use futures::future::join_all;
 
         // Call all providers in parallel
-        let tasks: Vec<_> = self.config.providers.iter().map(|provider_config| {
-            let client = ProviderClient {
-                config: provider_config.clone(),
-                http_client: self.http_client.clone(),
-            };
-            let log_line = log_line.to_string();
-            async move {
-                (provider_config.name.clone(), client.generate_template(&log_line).await)
-            }
-        }).collect();
+        let tasks: Vec<_> = self
+            .config
+            .providers
+            .iter()
+            .map(|provider_config| {
+                let client = ProviderClient {
+                    config: provider_config.clone(),
+                    http_client: self.http_client.clone(),
+                };
+                let log_line = log_line.to_string();
+                async move {
+                    (
+                        provider_config.name.clone(),
+                        client.generate_template(&log_line).await,
+                    )
+                }
+            })
+            .collect();
 
         let results = join_all(tasks).await;
 
         // Collect successful responses
         let successful: Vec<(String, LogTemplate)> = results
             .into_iter()
-            .filter_map(|(name, result)| {
-                match result {
-                    Ok(template) => Some((name, template)),
-                    Err(e) => {
-                        tracing::warn!("Provider {} failed: {}", name, e);
-                        None
-                    }
+            .filter_map(|(name, result)| match result {
+                Ok(template) => Some((name, template)),
+                Err(e) => {
+                    tracing::warn!("Provider {} failed: {}", name, e);
+                    None
                 }
             })
             .collect();
@@ -368,7 +390,11 @@ impl LLMServiceClient {
     }
 
     /// Find consensus among multiple template responses
-    fn find_consensus(&self, templates: Vec<(String, LogTemplate)>, _log_line: &str) -> Result<LogTemplate> {
+    fn find_consensus(
+        &self,
+        templates: Vec<(String, LogTemplate)>,
+        _log_line: &str,
+    ) -> Result<LogTemplate> {
         let required_agreement = match self.config.consensus_strategy {
             ConsensusStrategy::Unanimous => templates.len(),
             ConsensusStrategy::Majority => (templates.len() / 2) + 1,
@@ -377,12 +403,18 @@ impl LLMServiceClient {
         };
 
         // Group templates by pattern similarity
-        let mut pattern_groups: FxHashMap<String, Vec<(String, LogTemplate)>> = FxHashMap::default();
+        let mut pattern_groups: FxHashMap<String, Vec<(String, LogTemplate)>> =
+            FxHashMap::default();
 
         for (provider_name, template) in templates {
             // Normalize pattern for comparison (remove whitespace differences)
-            let normalized = template.pattern.split_whitespace().collect::<Vec<_>>().join(" ");
-            pattern_groups.entry(normalized.clone())
+            let normalized = template
+                .pattern
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            pattern_groups
+                .entry(normalized.clone())
                 .or_default()
                 .push((provider_name, template));
         }
@@ -392,9 +424,10 @@ impl LLMServiceClient {
 
         for (pattern, group) in pattern_groups.iter() {
             if group.len() >= required_agreement
-                && (best_group.is_none() || group.len() > best_group.unwrap().1.len()) {
-                    best_group = Some((pattern, group));
-                }
+                && (best_group.is_none() || group.len() > best_group.unwrap().1.len())
+            {
+                best_group = Some((pattern, group));
+            }
         }
 
         match best_group {
@@ -423,7 +456,10 @@ impl LLMServiceClient {
                     .max_by_key(|g| g.len())
                     .ok_or_else(|| anyhow::anyhow!("No templates available"))?;
 
-                tracing::info!("Using most common pattern with {} votes", largest_group.len());
+                tracing::info!(
+                    "Using most common pattern with {} votes",
+                    largest_group.len()
+                );
                 Ok(largest_group[0].1.clone())
             }
         }
@@ -435,7 +471,11 @@ impl LLMServiceClient {
     }
 
     /// Classify log fragments using first available LLM
-    pub async fn classify_fragments(&self, fragments: &[String], full_log: &str) -> Result<Vec<String>> {
+    pub async fn classify_fragments(
+        &self,
+        fragments: &[String],
+        full_log: &str,
+    ) -> Result<Vec<String>> {
         // Use first provider for fragment classification
         if let Some(provider_config) = self.config.providers.first() {
             let client = ProviderClient {
@@ -467,7 +507,10 @@ impl ProviderClient {
     async fn call_simple(&self, prompt: &str) -> Result<String> {
         match self.config.provider.as_str() {
             "openai" => {
-                let api_key = self.config.api_key.as_ref()
+                let api_key = self
+                    .config
+                    .api_key
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("OpenAI API key not configured"))?;
 
                 let request_body = serde_json::json!({
@@ -482,7 +525,8 @@ impl ProviderClient {
                     "max_tokens": 3000
                 });
 
-                let response = self.http_client
+                let response = self
+                    .http_client
                     .post("https://api.openai.com/v1/chat/completions")
                     .header("Authorization", format!("Bearer {}", api_key))
                     .header("Content-Type", "application/json")
@@ -509,17 +553,24 @@ impl ProviderClient {
                     anyhow::bail!("No response from OpenAI")
                 }
             }
-            _ => anyhow::bail!("call_simple only supported for OpenAI provider")
+            _ => anyhow::bail!("call_simple only supported for OpenAI provider"),
         }
     }
 
     /// Classify log fragments
-    async fn classify_fragments(&self, fragments: &[String], full_log: &str) -> Result<Vec<String>> {
+    async fn classify_fragments(
+        &self,
+        fragments: &[String],
+        full_log: &str,
+    ) -> Result<Vec<String>> {
         let prompt = Self::build_classification_prompt(fragments, full_log);
 
         match self.config.provider.as_str() {
             "openai" => {
-                let api_key = self.config.api_key.as_ref()
+                let api_key = self
+                    .config
+                    .api_key
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("OpenAI API key not configured"))?;
 
                 let request_body = serde_json::json!({
@@ -534,7 +585,8 @@ impl ProviderClient {
                     "max_tokens": 2000
                 });
 
-                let response = self.http_client
+                let response = self
+                    .http_client
                     .post("https://api.openai.com/v1/chat/completions")
                     .header("Authorization", format!("Bearer {}", api_key))
                     .header("Content-Type", "application/json")
@@ -562,7 +614,10 @@ impl ProviderClient {
                 }
             }
             "ollama" => {
-                let endpoint = self.config.endpoint.as_ref()
+                let endpoint = self
+                    .config
+                    .endpoint
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("Ollama endpoint not configured"))?;
 
                 let request_body = serde_json::json!({
@@ -575,7 +630,8 @@ impl ProviderClient {
                     }
                 });
 
-                let response = self.http_client
+                let response = self
+                    .http_client
                     .post(format!("{}/api/generate", endpoint))
                     .json(&request_body)
                     .send()
@@ -583,25 +639,35 @@ impl ProviderClient {
 
                 let response_json: serde_json::Value = response.json().await?;
 
-                if let Some(generated_text) = response_json.get("response").and_then(|v| v.as_str()) {
+                if let Some(generated_text) = response_json.get("response").and_then(|v| v.as_str())
+                {
                     Self::parse_classification_response(generated_text)
                 } else {
                     anyhow::bail!("No response from Ollama")
                 }
             }
-            _ => anyhow::bail!("Fragment classification not supported for provider: {}", self.config.provider)
+            _ => anyhow::bail!(
+                "Fragment classification not supported for provider: {}",
+                self.config.provider
+            ),
         }
     }
 
     fn build_classification_prompt(fragments: &[String], full_log: &str) -> String {
         // Use the existing fragment classifier prompt building logic
-        crate::fragment_classifier::FragmentClassifier::build_classification_prompt(fragments, full_log)
+        crate::fragment_classifier::FragmentClassifier::build_classification_prompt(
+            fragments, full_log,
+        )
     }
 
     fn parse_classification_response(response: &str) -> Result<Vec<String>> {
         // Extract JSON array from response
-        let json_start = response.find('[').ok_or_else(|| anyhow::anyhow!("No JSON array found"))?;
-        let json_end = response.rfind(']').ok_or_else(|| anyhow::anyhow!("No JSON array end found"))?;
+        let json_start = response
+            .find('[')
+            .ok_or_else(|| anyhow::anyhow!("No JSON array found"))?;
+        let json_end = response
+            .rfind(']')
+            .ok_or_else(|| anyhow::anyhow!("No JSON array end found"))?;
         let json_str = &response[json_start..=json_end];
 
         let classifications: Vec<String> = serde_json::from_str(json_str)

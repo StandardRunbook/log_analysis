@@ -13,7 +13,8 @@ impl FragmentClassifier {
     pub fn tokenize(log_line: &str) -> Vec<String> {
         // Regex to split on delimiters:
         // ://  OR  whitespace/quotes/brackets/etc  OR  period followed by space/end  OR  escaped quotes
-        let delimiter_pattern = r#"(?:://)|(?:(?:[\s'";=()\[\]{}?@&<>:\n\t\r,])|(?:\.(\s+|$))|(?:\\["\']))"#;
+        let delimiter_pattern =
+            r#"(?:://)|(?:(?:[\s'";=()\[\]{}?@&<>:\n\t\r,])|(?:\.(\s+|$))|(?:\\["\']))"#;
 
         let delimiter_re = Regex::new(delimiter_pattern).unwrap();
 
@@ -44,7 +45,8 @@ impl FragmentClassifier {
 
     /// Build LLM prompt to classify fragments
     pub fn build_classification_prompt(fragments: &[String], full_log: &str) -> String {
-        let fragments_str = fragments.iter()
+        let fragments_str = fragments
+            .iter()
             .enumerate()
             .map(|(i, f)| format!("  {}: \"{}\"", i, f))
             .collect::<Vec<_>>()
@@ -75,8 +77,7 @@ Valid classifications:
 - static_text: Fixed keywords that don't change (authentication, failure, ERROR, etc.)
 
 Respond with ONLY the JSON array, no explanation."#,
-            full_log,
-            fragments_str
+            full_log, fragments_str
         )
     }
 
@@ -87,8 +88,8 @@ Respond with ONLY the JSON array, no explanation."#,
         let json_end = response.rfind(']').ok_or("No JSON array end found")?;
         let json_str = &response[json_start..=json_end];
 
-        let classifications: Vec<String> = serde_json::from_str(json_str)
-            .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+        let classifications: Vec<String> =
+            serde_json::from_str(json_str).map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
         classifications
             .iter()
@@ -166,7 +167,9 @@ Respond with ONLY the JSON array, no explanation."#,
                     variables.push("hex".to_string());
                 }
                 FragmentType::Uuid => {
-                    pattern.push_str(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})");
+                    pattern.push_str(
+                        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+                    );
                     variables.push("uuid".to_string());
                 }
                 FragmentType::Url => {

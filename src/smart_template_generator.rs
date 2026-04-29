@@ -67,13 +67,19 @@ impl SmartTemplateGenerator {
 
         // Patterns to detect variable fields (in order of specificity)
         let variable_patterns = vec![
-            (r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"), // IP address
-            (r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b", r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"), // UUID
+            (
+                r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+                r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})",
+            ), // IP address
+            (
+                r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+                r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+            ), // UUID
             (r"\b0x[0-9a-fA-F]+\b", r"(0x[0-9a-fA-F]+)"), // Hex number
             (r"\b[a-f0-9]{32,64}\b", r"([a-f0-9]{32,64})"), // Hash
-            (r"/[\w/\.-]+", r"([\w/\.-]+)"), // File path
-            (r"\b\d+\.\d+\b", r"(\d+\.\d+)"), // Decimal number
-            (r"\b\d+\b", r"(\d+)"), // Integer
+            (r"/[\w/\.-]+", r"([\w/\.-]+)"),              // File path
+            (r"\b\d+\.\d+\b", r"(\d+\.\d+)"),             // Decimal number
+            (r"\b\d+\b", r"(\d+)"),                       // Integer
         ];
 
         // Find all variable matches
@@ -82,7 +88,10 @@ impl SmartTemplateGenerator {
             if let Ok(re) = Regex::new(pattern_str) {
                 for mat in re.find_iter(message) {
                     // Don't overlap with existing matches
-                    if !matches.iter().any(|(s, e, _)| mat.start() < *e && mat.end() > *s) {
+                    if !matches
+                        .iter()
+                        .any(|(s, e, _)| mat.start() < *e && mat.end() > *s)
+                    {
                         matches.push((mat.start(), mat.end(), replacement));
                     }
                 }
@@ -179,7 +188,8 @@ mod tests {
         assert!(template.pattern.contains("sshd\\(pam_unix\\)"));
         assert!(template.pattern.contains(r"\[(\d+)\]"));
         // IP address should be captured as a pattern, not literal
-        assert!(template.pattern.contains(r"\d") || template.pattern.contains(r"[\d"));  // IP should be captured
+        assert!(template.pattern.contains(r"\d") || template.pattern.contains(r"[\d"));
+        // IP should be captured
     }
 
     #[test]

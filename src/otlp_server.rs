@@ -90,14 +90,8 @@ impl LogsService for OtlpLogsServer {
                 .get("log_stream_name")
                 .cloned()
                 .unwrap_or_else(|| log_stream_id.clone());
-            let service = attrs
-                .get("service.name")
-                .cloned()
-                .unwrap_or_default();
-            let region = attrs
-                .get("cloud.region")
-                .cloned()
-                .unwrap_or_default();
+            let service = attrs.get("service.name").cloned().unwrap_or_default();
+            let region = attrs.get("cloud.region").cloned().unwrap_or_default();
 
             for scope_logs in resource_logs.scope_logs {
                 for log_record in scope_logs.log_records {
@@ -131,9 +125,7 @@ impl LogsService for OtlpLogsServer {
                         region: region.clone(),
                         log_stream_name: log_stream_name.clone(),
                         timestamp,
-                        template_id: template_id
-                            .map(|tid| tid.to_string())
-                            .unwrap_or_default(),
+                        template_id: template_id.map(|tid| tid.to_string()).unwrap_or_default(),
                         message,
                     };
 

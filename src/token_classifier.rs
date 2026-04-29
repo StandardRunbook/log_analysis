@@ -70,28 +70,41 @@ pub fn classify_token(token: &str, context: Option<&str>) -> TokenClass {
 fn is_static_keyword(token: &str) -> bool {
     // Service names
     const SERVICES: &[&str] = &[
-        "sshd", "kernel", "cups", "ftpd", "su", "gpm", "systemd",
-        "pam_unix", "cron", "nginx", "apache", "mysql", "postgres",
+        "sshd", "kernel", "cups", "ftpd", "su", "gpm", "systemd", "pam_unix", "cron", "nginx",
+        "apache", "mysql", "postgres",
     ];
 
     // Action verbs
     const ACTIONS: &[&str] = &[
-        "authentication", "failure", "success", "opened", "closed",
-        "started", "stopped", "connected", "disconnected", "failed",
-        "session", "connection", "registered", "unregistered",
+        "authentication",
+        "failure",
+        "success",
+        "opened",
+        "closed",
+        "started",
+        "stopped",
+        "connected",
+        "disconnected",
+        "failed",
+        "session",
+        "connection",
+        "registered",
+        "unregistered",
     ];
 
     // Field names (these are structural markers, not values)
     const FIELD_NAMES: &[&str] = &[
-        "uid", "euid", "tty", "ruser", "rhost", "logname",
-        "pid", "user", "from", "to", "port", "status",
+        "uid", "euid", "tty", "ruser", "rhost", "logname", "pid", "user", "from", "to", "port",
+        "status",
     ];
 
     let lower = token.to_lowercase();
 
-    SERVICES.iter().any(|&s| lower.contains(s)) ||
-    ACTIONS.iter().any(|&a| lower.contains(a)) ||
-    FIELD_NAMES.iter().any(|&f| lower == f || lower == format!("{}=", f))
+    SERVICES.iter().any(|&s| lower.contains(s))
+        || ACTIONS.iter().any(|&a| lower.contains(a))
+        || FIELD_NAMES
+            .iter()
+            .any(|&f| lower == f || lower == format!("{}=", f))
 }
 
 /// Check if token is ephemeral (always changes, no clustering value)
@@ -102,12 +115,17 @@ fn is_ephemeral(token: &str) -> bool {
     }
 
     // IP addresses (v4)
-    if Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$").unwrap().is_match(token) {
+    if Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
+        .unwrap()
+        .is_match(token)
+    {
         return true;
     }
 
     // IPv6 addresses
-    if token.contains("::") || (token.contains(':') && token.chars().filter(|&c| c == ':').count() > 2) {
+    if token.contains("::")
+        || (token.contains(':') && token.chars().filter(|&c| c == ':').count() > 2)
+    {
         return true;
     }
 
@@ -117,24 +135,32 @@ fn is_ephemeral(token: &str) -> bool {
     }
 
     // Dates (YYYY-MM-DD, MM/DD/YYYY, etc.)
-    if Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap().is_match(token) ||
-       Regex::new(r"^\d{2}/\d{2}/\d{4}$").unwrap().is_match(token) {
+    if Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap().is_match(token)
+        || Regex::new(r"^\d{2}/\d{2}/\d{4}$").unwrap().is_match(token)
+    {
         return true;
     }
 
     // Months (abbreviated)
-    if ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-        .contains(&token) {
+    if [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .contains(&token)
+    {
         return true;
     }
 
     // UUIDs
-    if Regex::new(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$").unwrap().is_match(token) {
+    if Regex::new(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+        .unwrap()
+        .is_match(token)
+    {
         return true;
     }
 
     // Hex numbers (like memory addresses, request IDs)
-    if token.starts_with("0x") || (token.len() > 8 && token.chars().all(|c| c.is_ascii_hexdigit())) {
+    if token.starts_with("0x") || (token.len() > 8 && token.chars().all(|c| c.is_ascii_hexdigit()))
+    {
         return true;
     }
 
@@ -165,7 +191,10 @@ fn classify_parameter(token: &str, context: Option<&str>) -> ParameterType {
         }
 
         // Action/Result
-        if ctx_lower.contains("status") || ctx_lower.contains("code") || ctx_lower.contains("result") {
+        if ctx_lower.contains("status")
+            || ctx_lower.contains("code")
+            || ctx_lower.contains("result")
+        {
             return ParameterType::Action;
         }
 
@@ -192,7 +221,12 @@ fn classify_parameter(token: &str, context: Option<&str>) -> ParameterType {
     }
 
     // Error codes, status codes
-    if token.starts_with("ERR") || token.starts_with("OK") || token == "200" || token == "404" || token == "500" {
+    if token.starts_with("ERR")
+        || token.starts_with("OK")
+        || token == "200"
+        || token == "404"
+        || token == "500"
+    {
         return ParameterType::Action;
     }
 
@@ -246,7 +280,10 @@ mod tests {
         assert_eq!(classify_token("192.168.1.1", None), TokenClass::Ephemeral); // IP
         assert_eq!(classify_token("15:30:45", None), TokenClass::Ephemeral); // Time
         assert_eq!(classify_token("Jun", None), TokenClass::Ephemeral); // Month
-        assert_eq!(classify_token("550e8400-e29b-41d4-a716-446655440000", None), TokenClass::Ephemeral); // UUID
+        assert_eq!(
+            classify_token("550e8400-e29b-41d4-a716-446655440000", None),
+            TokenClass::Ephemeral
+        ); // UUID
     }
 
     #[test]
@@ -296,7 +333,10 @@ mod tests {
             ("authentication", TokenClass::Static),
             ("failure", TokenClass::Static),
             ("root", TokenClass::Parameter(ParameterType::User)),
-            ("example.com", TokenClass::Parameter(ParameterType::Location)),
+            (
+                "example.com",
+                TokenClass::Parameter(ParameterType::Location),
+            ),
         ];
 
         let signature = extract_template_signature(&tokens);

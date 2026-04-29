@@ -24,12 +24,10 @@ struct CachedTemplate {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let clickhouse_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
 
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| "http://localhost:8123".to_string());
-
-    let org_id = std::env::var("ORG_ID")
-        .unwrap_or_else(|_| "default".to_string());
+    let org_id = std::env::var("ORG_ID").unwrap_or_else(|_| "default".to_string());
 
     println!("Connecting to ClickHouse at {}", clickhouse_url);
     let client = ClickHouseClient::new(&clickhouse_url)?;
@@ -49,7 +47,8 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        let filename = path.file_name()
+        let filename = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
@@ -90,11 +89,17 @@ async fn main() -> Result<()> {
                     total_inserted += 1;
                     inserted_count += 1;
                 }
-                Err(e) => eprintln!("  Failed to insert template {}: {}", template.template_id, e),
+                Err(e) => eprintln!(
+                    "  Failed to insert template {}: {}",
+                    template.template_id, e
+                ),
             }
         }
 
-        println!("  Inserted {}/{} templates from {}", inserted_count, template_count, filename);
+        println!(
+            "  Inserted {}/{} templates from {}",
+            inserted_count, template_count, filename
+        );
     }
 
     println!("\nTotal templates inserted: {}", total_inserted);

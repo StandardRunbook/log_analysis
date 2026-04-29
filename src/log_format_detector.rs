@@ -3,13 +3,9 @@ use regex::Regex;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogFormat {
-    Syslog {
-        has_pid: bool,
-    },
+    Syslog { has_pid: bool },
     ISOTimestamp,
-    CustomDelimited {
-        delimiter: char,
-    },
+    CustomDelimited { delimiter: char },
     Unstructured,
 }
 
@@ -40,7 +36,8 @@ impl LogFormatDetector {
     /// Check if log line follows syslog format
     fn is_syslog_format(log_line: &str) -> bool {
         // Syslog pattern: "Month Day HH:MM:SS hostname ..."
-        let syslog_pattern = Regex::new(r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+").unwrap();
+        let syslog_pattern =
+            Regex::new(r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+").unwrap();
         syslog_pattern.is_match(log_line)
     }
 
@@ -66,14 +63,24 @@ impl LogFormatDetector {
             r"^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+?)(\[\d+\])?\s*:\s*(.+)$"
         ).ok()?;
 
-        pattern.captures(log_line).map(|caps| {
-            SyslogComponents {
-                timestamp: caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default(),
-                hostname: caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_default(),
-                service: caps.get(3).map(|m| m.as_str().to_string()).unwrap_or_default(),
-                pid: caps.get(4).map(|m| m.as_str().to_string()),
-                message: caps.get(5).map(|m| m.as_str().to_string()).unwrap_or_default(),
-            }
+        pattern.captures(log_line).map(|caps| SyslogComponents {
+            timestamp: caps
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+            hostname: caps
+                .get(2)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+            service: caps
+                .get(3)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+            pid: caps.get(4).map(|m| m.as_str().to_string()),
+            message: caps
+                .get(5)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
         })
     }
 }

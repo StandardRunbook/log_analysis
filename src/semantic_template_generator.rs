@@ -52,7 +52,8 @@ pub struct SemanticMatch {
 
 /// Tokenization regex - splits log into tokens
 static TOKENIZER: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
-    Regex::new(r#"(?:://)|(?:(?:[\s'`";=()\[\]{}?@&<>:\n\t\r,])|(?:[\.](\s+|$))|(?:\\["']))+"#).unwrap()
+    Regex::new(r#"(?:://)|(?:(?:[\s'`";=()\[\]{}?@&<>:\n\t\r,])|(?:[\.](\s+|$))|(?:\\["']))+"#)
+        .unwrap()
 });
 
 /// Tokenize a log line into components
@@ -98,11 +99,33 @@ pub fn classify_tokens(tokens: &[&str]) -> (Vec<String>, Vec<String>) {
 fn is_static_keyword(token: &str) -> bool {
     // Service names, log levels, field names, common verbs
     let static_patterns = [
-        "authentication", "failure", "success", "opened", "closed",
-        "sshd", "kernel", "cups", "ftpd", "su", "gpm",
-        "pam_unix", "session", "connection", "from", "for",
-        "uid", "euid", "tty", "ruser", "rhost", "user", "logname",
-        "INFO", "ERROR", "WARN", "DEBUG",
+        "authentication",
+        "failure",
+        "success",
+        "opened",
+        "closed",
+        "sshd",
+        "kernel",
+        "cups",
+        "ftpd",
+        "su",
+        "gpm",
+        "pam_unix",
+        "session",
+        "connection",
+        "from",
+        "for",
+        "uid",
+        "euid",
+        "tty",
+        "ruser",
+        "rhost",
+        "user",
+        "logname",
+        "INFO",
+        "ERROR",
+        "WARN",
+        "DEBUG",
     ];
 
     static_patterns.iter().any(|&pat| token.contains(pat))
@@ -115,11 +138,11 @@ fn is_likely_parameter(token: &str) -> bool {
     }
 
     // Numbers, IPs, paths, usernames, etc.
-    token.chars().any(|c| c.is_numeric()) ||
-    token.contains('.') ||
-    token.contains('/') ||
-    token.contains('-') ||
-    token.len() > 2  // Short tokens like "at", "by" are likely keywords
+    token.chars().any(|c| c.is_numeric())
+        || token.contains('.')
+        || token.contains('/')
+        || token.contains('-')
+        || token.len() > 2 // Short tokens like "at", "by" are likely keywords
 }
 
 /// Infer what type of parameter this token represents
@@ -150,8 +173,11 @@ fn infer_parameter_type(token: &str) -> String {
     }
 
     // Month
-    if ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-        .contains(&token) {
+    if [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .contains(&token)
+    {
         return "month".to_string();
     }
 
@@ -228,7 +254,14 @@ mod tests {
 
     #[test]
     fn test_classify_tokens() {
-        let tokens = vec!["sshd", "authentication", "failure", "192.168.1.1", "root", "12345"];
+        let tokens = vec![
+            "sshd",
+            "authentication",
+            "failure",
+            "192.168.1.1",
+            "root",
+            "12345",
+        ];
         let (keywords, params) = classify_tokens(&tokens);
 
         // Keywords: sshd, authentication, failure

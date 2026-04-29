@@ -39,11 +39,10 @@ struct OutputTemplate {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let clickhouse_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
 
-    let org_id = std::env::var("ORG_ID")
-        .unwrap_or_else(|_| "default".to_string());
+    let org_id = std::env::var("ORG_ID").unwrap_or_else(|_| "default".to_string());
 
     println!("Connecting to ClickHouse at {}", clickhouse_url);
     let client = ClickHouseClient::new(&clickhouse_url)?;
@@ -67,7 +66,8 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        let filename = path.file_name()
+        let filename = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
@@ -126,7 +126,9 @@ async fn main() -> Result<()> {
         println!("Regenerating cache for {}...", dataset_name);
 
         let log_stream_id = format!("cache-{}", dataset_name);
-        let templates = client.get_templates_for_stream(&org_id, &log_stream_id).await?;
+        let templates = client
+            .get_templates_for_stream(&org_id, &log_stream_id)
+            .await?;
 
         if templates.is_empty() {
             println!("  Warning: No templates found for {}", dataset_name);
@@ -134,12 +136,15 @@ async fn main() -> Result<()> {
         }
 
         let output = OutputCache {
-            templates: templates.iter().map(|t| OutputTemplate {
-                template_id: t.template_id,
-                pattern: t.pattern.clone(),
-                variables: t.variables.clone(),
-                example: t.example.clone(),
-            }).collect(),
+            templates: templates
+                .iter()
+                .map(|t| OutputTemplate {
+                    template_id: t.template_id,
+                    pattern: t.pattern.clone(),
+                    variables: t.variables.clone(),
+                    example: t.example.clone(),
+                })
+                .collect(),
         };
 
         let json = serde_json::to_string_pretty(&output)?;

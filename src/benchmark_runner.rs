@@ -277,7 +277,8 @@ where
 
             for (idx, match_result) in match_results.iter().enumerate() {
                 if match_result.is_none() {
-                    if let Ok(new_template) = generator.generate_template(chunk[idx].as_str()).await {
+                    if let Ok(new_template) = generator.generate_template(chunk[idx].as_str()).await
+                    {
                         matcher.add_template(new_template);
                         templates_generated += 1;
                     }

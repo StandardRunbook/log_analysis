@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMProviderConfig {
     pub name: String,
-    pub provider: String,  // "openai", "ollama", "anthropic", etc.
+    pub provider: String, // "openai", "ollama", "anthropic", etc.
     pub model: String,
     pub api_key: Option<String>,
-    pub endpoint: Option<String>,  // For Ollama or custom endpoints
+    pub endpoint: Option<String>, // For Ollama or custom endpoints
     pub timeout_secs: Option<u64>,
 }
 
@@ -16,7 +16,7 @@ pub struct LLMProviderConfig {
 pub struct MultiLLMConfig {
     pub providers: Vec<LLMProviderConfig>,
     pub consensus_strategy: ConsensusStrategy,
-    pub min_agreement: usize,  // Minimum number of LLMs that must agree
+    pub min_agreement: usize, // Minimum number of LLMs that must agree
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -35,16 +35,14 @@ pub enum ConsensusStrategy {
 impl Default for MultiLLMConfig {
     fn default() -> Self {
         Self {
-            providers: vec![
-                LLMProviderConfig {
-                    name: "ollama".to_string(),
-                    provider: "ollama".to_string(),
-                    model: "llama3".to_string(),
-                    api_key: None,
-                    endpoint: Some("http://localhost:11434".to_string()),
-                    timeout_secs: Some(60),
-                }
-            ],
+            providers: vec![LLMProviderConfig {
+                name: "ollama".to_string(),
+                provider: "ollama".to_string(),
+                model: "llama3".to_string(),
+                api_key: None,
+                endpoint: Some("http://localhost:11434".to_string()),
+                timeout_secs: Some(60),
+            }],
             consensus_strategy: ConsensusStrategy::FirstSuccess,
             min_agreement: 1,
         }
@@ -70,16 +68,14 @@ impl MultiLLMConfig {
         let endpoint = std::env::var("OLLAMA_ENDPOINT").ok();
 
         Self {
-            providers: vec![
-                LLMProviderConfig {
-                    name: provider.clone(),
-                    provider,
-                    model,
-                    api_key,
-                    endpoint,
-                    timeout_secs: Some(60),
-                }
-            ],
+            providers: vec![LLMProviderConfig {
+                name: provider.clone(),
+                provider,
+                model,
+                api_key,
+                endpoint,
+                timeout_secs: Some(60),
+            }],
             consensus_strategy: ConsensusStrategy::FirstSuccess,
             min_agreement: 1,
         }
@@ -135,16 +131,14 @@ mod tests {
     #[test]
     fn test_unanimous_validation() {
         let config = MultiLLMConfig {
-            providers: vec![
-                LLMProviderConfig {
-                    name: "provider1".to_string(),
-                    provider: "ollama".to_string(),
-                    model: "model1".to_string(),
-                    api_key: None,
-                    endpoint: None,
-                    timeout_secs: None,
-                }
-            ],
+            providers: vec![LLMProviderConfig {
+                name: "provider1".to_string(),
+                provider: "ollama".to_string(),
+                model: "model1".to_string(),
+                api_key: None,
+                endpoint: None,
+                timeout_secs: None,
+            }],
             consensus_strategy: ConsensusStrategy::Unanimous,
             min_agreement: 1,
         };
@@ -171,7 +165,7 @@ mod tests {
                     api_key: Some("key".to_string()),
                     endpoint: None,
                     timeout_secs: None,
-                }
+                },
             ],
             consensus_strategy: ConsensusStrategy::Majority,
             min_agreement: 2,

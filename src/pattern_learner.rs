@@ -17,10 +17,7 @@ impl PatternLearner {
         }
 
         // Tokenize all samples
-        let tokenized: Vec<Vec<Token>> = samples
-            .iter()
-            .map(|s| Self::tokenize(s))
-            .collect();
+        let tokenized: Vec<Vec<Token>> = samples.iter().map(|s| Self::tokenize(s)).collect();
 
         // Align tokens and find variable positions
         let pattern_tokens = Self::align_and_detect_variables(&tokenized);
@@ -116,7 +113,10 @@ impl PatternLearner {
             let all_values: Vec<&str> = tokens.iter().map(|t| t.value.as_str()).collect();
 
             // Check if it looks like a timestamp
-            if all_values.iter().any(|v| v.len() == 10 && v.parse::<u32>().is_ok()) {
+            if all_values
+                .iter()
+                .any(|v| v.len() == 10 && v.parse::<u32>().is_ok())
+            {
                 return VariableType::UnixTimestamp;
             }
 
@@ -137,9 +137,10 @@ impl PatternLearner {
         }
 
         // Check if it's a hex number
-        if tokens.iter().all(|t| {
-            t.value.starts_with("0x") || t.value.chars().all(|c| c.is_ascii_hexdigit())
-        }) {
+        if tokens
+            .iter()
+            .all(|t| t.value.starts_with("0x") || t.value.chars().all(|c| c.is_ascii_hexdigit()))
+        {
             return VariableType::HexNumber;
         }
 
@@ -251,9 +252,15 @@ impl VariableType {
     fn to_regex_and_name(&self) -> (&'static str, String) {
         match self {
             VariableType::Number => (r"(\d+)", "number".to_string()),
-            VariableType::IPAddress => (r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", "ip_address".to_string()),
+            VariableType::IPAddress => (
+                r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})",
+                "ip_address".to_string(),
+            ),
             VariableType::HexNumber => (r"(0x[0-9a-fA-F]+|[0-9a-fA-F]+)", "hex_number".to_string()),
-            VariableType::Uuid => (r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", "uuid".to_string()),
+            VariableType::Uuid => (
+                r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+                "uuid".to_string(),
+            ),
             VariableType::UnixTimestamp => (r"(\d{10,})", "timestamp".to_string()),
             VariableType::String => (r"(\S+)", "value".to_string()),
         }
@@ -279,6 +286,8 @@ mod tests {
 
         // Should detect that timestamp, pid, and IP change
         assert!(pattern.contains(r"(\d+)")); // PID
-        assert!(variables.iter().any(|v| v.contains("ip") || v.contains("number")));
+        assert!(variables
+            .iter()
+            .any(|v| v.contains("ip") || v.contains("number")));
     }
 }

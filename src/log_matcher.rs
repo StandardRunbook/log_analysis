@@ -48,7 +48,8 @@ impl ScratchSpace {
 
 #[allow(dead_code)]
 static TOKENIZER: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
-    Regex::new(r#"(?:://)|(?:(?:[\s'`";=()\[\]{}?@&<>:\n\t\r,])|(?:[\.](\s+|$))|(?:\\["']))+"#).unwrap()
+    Regex::new(r#"(?:://)|(?:(?:[\s'`";=()\[\]{}?@&<>:\n\t\r,])|(?:[\.](\s+|$))|(?:\\["']))+"#)
+        .unwrap()
 });
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +71,7 @@ struct MatcherSnapshot {
     template_fragments: FxHashMap<u64, SmallFragmentVec>,
     fragment_id_to_string: FxHashMap<u32, String>,
     fragment_string_to_id: FxHashMap<String, u32>,
-    fragment_weights: FxHashMap<u32, f64>,  // Fragment specificity weights
+    fragment_weights: FxHashMap<u32, f64>, // Fragment specificity weights
     next_fragment_id: u32,
     patterns: FxHashMap<u64, Arc<Regex>>,
     templates: FxHashMap<u64, Arc<LogTemplate>>,
@@ -133,7 +134,8 @@ impl MatcherSnapshot {
             }
         }
 
-        self.template_fragments.insert(template_id, fragment_ids.clone());
+        self.template_fragments
+            .insert(template_id, fragment_ids.clone());
 
         use std::collections::HashMap;
         let mut fragment_id_map: HashMap<u32, SmallTemplateVec> = HashMap::new();
@@ -159,7 +161,8 @@ impl MatcherSnapshot {
 
         for (ac_idx, &frag_id) in unique_fragment_ids.iter().enumerate() {
             if let Some(template_frags) = fragment_id_map.get(&frag_id) {
-                self.fragment_to_template.insert(ac_idx, template_frags.clone());
+                self.fragment_to_template
+                    .insert(ac_idx, template_frags.clone());
             }
         }
 
@@ -184,11 +187,15 @@ impl MatcherSnapshot {
             scratch.clear();
 
             for mat in self.ac.find_iter(log_line) {
-                if let Some(template_list) = self.fragment_to_template.get(&mat.pattern().as_usize()) {
+                if let Some(template_list) =
+                    self.fragment_to_template.get(&mat.pattern().as_usize())
+                {
                     for &(template_id, fragment_idx) in template_list {
-                        if let Some(required_fragments) = self.template_fragments.get(&template_id) {
+                        if let Some(required_fragments) = self.template_fragments.get(&template_id)
+                        {
                             if let Some(&fragment_id) = required_fragments.get(fragment_idx) {
-                                scratch.template_matches
+                                scratch
+                                    .template_matches
                                     .entry(template_id)
                                     .or_insert_with(FxHashSet::default)
                                     .insert(fragment_id);
@@ -199,7 +206,8 @@ impl MatcherSnapshot {
             }
 
             // Build candidates list with weighted scores
-            let candidates_data: Vec<_> = scratch.template_matches
+            let candidates_data: Vec<_> = scratch
+                .template_matches
                 .iter()
                 .filter_map(|(template_id, matched_fragments)| {
                     self.template_fragments.get(template_id).map(|required| {
@@ -221,15 +229,25 @@ impl MatcherSnapshot {
                             matched_fragments.len() as f64 / required.len().max(1) as f64
                         };
 
-                        (*template_id, weighted_score, matched_fragments.len(), required.len())
+                        (
+                            *template_id,
+                            weighted_score,
+                            matched_fragments.len(),
+                            required.len(),
+                        )
                     })
                 })
                 .collect();
 
-            scratch.candidates.extend(candidates_data.into_iter().map(|(tid, _score, mc, rc)| (tid, mc, rc)));
+            scratch.candidates.extend(
+                candidates_data
+                    .into_iter()
+                    .map(|(tid, _score, mc, rc)| (tid, mc, rc)),
+            );
 
             // Sort by weighted score (stored temporarily in closure)
-            let mut scored_candidates: Vec<_> = scratch.template_matches
+            let mut scored_candidates: Vec<_> = scratch
+                .template_matches
                 .iter()
                 .filter_map(|(template_id, matched_fragments)| {
                     self.template_fragments.get(template_id).map(|required| {
@@ -360,7 +378,10 @@ fn extract_fragments(pattern: &str, min_length: usize) -> Vec<String> {
         fragments.push(current_fragment);
     }
 
-    fragments.into_iter().filter(|f| f.len() >= min_length).collect()
+    fragments
+        .into_iter()
+        .filter(|f| f.len() >= min_length)
+        .collect()
 }
 
 /// Calculate fragment specificity weight (normalized between 0.0 and 1.0)
@@ -373,17 +394,17 @@ fn calculate_fragment_weight(fragment: &str) -> f64 {
     // Medium fragments (5-20 chars): scaled linearly
     // Long fragments (>20 chars): high weight (capped)
     let length_score = if len < 5.0 {
-        len / 20.0  // 0.0 - 0.25 for very short
+        len / 20.0 // 0.0 - 0.25 for very short
     } else if len < 20.0 {
-        0.25 + ((len - 5.0) / 15.0) * 0.5  // 0.25 - 0.75 for medium
+        0.25 + ((len - 5.0) / 15.0) * 0.5 // 0.25 - 0.75 for medium
     } else {
-        0.75 + ((len - 20.0) / 40.0).min(0.25)  // 0.75 - 1.0 for long (cap at 60 chars)
+        0.75 + ((len - 20.0) / 40.0).min(0.25) // 0.75 - 1.0 for long (cap at 60 chars)
     };
 
     // Content quality score (0.0-1.0)
     let alphanum_count = fragment.chars().filter(|c| c.is_alphanumeric()).count() as f64;
     let alphanum_ratio = alphanum_count / len.max(1.0);
-    let content_score = alphanum_ratio * 0.8 + 0.2;  // Range: 0.2 (no alphanum) to 1.0 (all alphanum)
+    let content_score = alphanum_ratio * 0.8 + 0.2; // Range: 0.2 (no alphanum) to 1.0 (all alphanum)
 
     // Generic penalty (0.3 for generic, 1.0 for normal)
     let generic_penalty = if is_generic_fragment(fragment) {
@@ -417,10 +438,8 @@ fn is_generic_fragment(fragment: &str) -> bool {
 
     // Common field names in Linux logs
     let generic_patterns = [
-        " uid=", " gid=", " pid=", " euid=", " egid=",
-        " tty=", " user=", " host=", " ip=", " port=",
-        "id=", "name=", "type=", "status=", "code=",
-        ": ", " - ", " | ", " / ",
+        " uid=", " gid=", " pid=", " euid=", " egid=", " tty=", " user=", " host=", " ip=",
+        " port=", "id=", "name=", "type=", "status=", "code=", ": ", " - ", " | ", " / ",
     ];
 
     for pattern in &generic_patterns {
@@ -437,20 +456,33 @@ fn has_distinctive_markers(fragment: &str) -> bool {
     let lower = fragment.to_lowercase();
 
     // Service/daemon names
-    if lower.contains("sshd") || lower.contains("systemd") || lower.contains("kernel")
-        || lower.contains("docker") || lower.contains("nginx") || lower.contains("apache") {
+    if lower.contains("sshd")
+        || lower.contains("systemd")
+        || lower.contains("kernel")
+        || lower.contains("docker")
+        || lower.contains("nginx")
+        || lower.contains("apache")
+    {
         return true;
     }
 
     // Error/event keywords
-    if lower.contains("authentication") || lower.contains("failure") || lower.contains("error")
-        || lower.contains("warning") || lower.contains("critical") || lower.contains("denied") {
+    if lower.contains("authentication")
+        || lower.contains("failure")
+        || lower.contains("error")
+        || lower.contains("warning")
+        || lower.contains("critical")
+        || lower.contains("denied")
+    {
         return true;
     }
 
     // Specific log structures
-    if lower.contains("pam_unix") || lower.contains("logname") || lower.contains("session opened")
-        || lower.contains("session closed") {
+    if lower.contains("pam_unix")
+        || lower.contains("logname")
+        || lower.contains("session opened")
+        || lower.contains("session closed")
+    {
         return true;
     }
 
@@ -517,8 +549,7 @@ impl LogMatcher {
         // it here for callers that haven't been updated. The auto-increment
         // path (`next_id`) is retained only for legacy serialized state.
         if template.template_id == 0 {
-            template.template_id =
-                crate::template_id::template_id_from_pattern(&template.pattern);
+            template.template_id = crate::template_id::template_id_from_pattern(&template.pattern);
         }
 
         self.snapshot.rcu(|old_snapshot| {
@@ -564,7 +595,8 @@ impl LogMatcher {
             .par_chunks(CHUNK_SIZE)
             .map(|chunk| {
                 // Each thread processes its chunk sequentially for cache efficiency
-                chunk.iter()
+                chunk
+                    .iter()
                     .map(|log_line| snapshot.match_log(log_line))
                     .collect()
             })
@@ -587,7 +619,8 @@ impl LogMatcher {
         use std::io::Write;
 
         let snapshot = self.snapshot.load();
-        let templates: Vec<LogTemplate> = snapshot.templates.values().map(|t| (**t).clone()).collect();
+        let templates: Vec<LogTemplate> =
+            snapshot.templates.values().map(|t| (**t).clone()).collect();
         let next_id = self.next_template_id.load(Ordering::SeqCst);
 
         #[derive(Serialize, Deserialize)]
@@ -649,7 +682,8 @@ impl LogMatcher {
         use std::fs::File;
 
         let snapshot = self.snapshot.load();
-        let templates: Vec<LogTemplate> = snapshot.templates.values().map(|t| (**t).clone()).collect();
+        let templates: Vec<LogTemplate> =
+            snapshot.templates.values().map(|t| (**t).clone()).collect();
         let next_id = self.next_template_id.load(Ordering::SeqCst);
 
         #[derive(Serialize, Deserialize)]
@@ -904,8 +938,10 @@ mod tests {
     #[test]
     fn test_fragment_extraction() {
         // Test that fragments are correctly extracted
-        let fragments =
-            extract_fragments(r"Request ([a-zA-Z0-9_]+) completed in (\d+)ms with status (\d{3})", 2);
+        let fragments = extract_fragments(
+            r"Request ([a-zA-Z0-9_]+) completed in (\d+)ms with status (\d{3})",
+            2,
+        );
         assert_eq!(
             fragments,
             vec!["Request ", " completed in ", "ms with status "]
@@ -923,7 +959,6 @@ mod tests {
         let fragments = extract_fragments(r"path: /var/log/(\w+)\.log", 2);
         assert_eq!(fragments, vec!["path: /var/log/", ".log"]);
     }
-
 
     #[test]
     fn test_multi_fragment_disambiguation() {
@@ -1001,7 +1036,11 @@ mod tests {
         // Should match template 200 (specific sshd pattern) not 201 (generic)
         // The distinctive fragments like "sshd(pam_unix)[" and "authentication failure; logname="
         // should have higher weight than generic " uid=" and " tty="
-        assert_eq!(result, Some(200), "Should match specific sshd template, not generic one");
+        assert_eq!(
+            result,
+            Some(200),
+            "Should match specific sshd template, not generic one"
+        );
     }
 
     #[test]
@@ -1021,7 +1060,13 @@ mod tests {
         println!("  '{}' -> {:.2}", long_frag, long_weight);
 
         // Distinctive fragments should have higher weight than generic ones
-        assert!(distinctive_weight > generic_weight, "Distinctive fragment should have higher weight");
-        assert!(long_weight > generic_weight, "Long fragment should have higher weight");
+        assert!(
+            distinctive_weight > generic_weight,
+            "Distinctive fragment should have higher weight"
+        );
+        assert!(
+            long_weight > generic_weight,
+            "Long fragment should have higher weight"
+        );
     }
 }

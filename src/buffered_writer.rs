@@ -157,7 +157,10 @@ async fn run_writer_task(
 
 async fn flush(clickhouse: &ClickHouseClient, logs: Vec<LogEntry>, trigger: &str) {
     let count = logs.len();
-    debug!("Flushing {} logs to ClickHouse ({} trigger)", count, trigger);
+    debug!(
+        "Flushing {} logs to ClickHouse ({} trigger)",
+        count, trigger
+    );
     if let Err(e) = clickhouse.insert_logs_batch(logs).await {
         error!("Failed to flush {} logs to ClickHouse: {}", count, e);
     }
