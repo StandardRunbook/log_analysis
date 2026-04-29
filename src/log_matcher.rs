@@ -343,11 +343,11 @@ fn extract_fragments(pattern: &str, min_length: usize) -> Vec<String> {
             ')' if !in_char_class => {
                 depth -= 1;
             }
-            '.' | '*' | '+' | '?' | '{' | '}' | '^' | '$' | '|' if depth == 0 && !in_char_class => {
-                if !current_fragment.is_empty() {
-                    fragments.push(current_fragment.clone());
-                    current_fragment.clear();
-                }
+            '.' | '*' | '+' | '?' | '{' | '}' | '^' | '$' | '|'
+                if depth == 0 && !in_char_class && !current_fragment.is_empty() =>
+            {
+                fragments.push(current_fragment.clone());
+                current_fragment.clear();
             }
             _ if depth == 0 && !in_char_class => {
                 current_fragment.push(ch);
