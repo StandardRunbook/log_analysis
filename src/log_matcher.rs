@@ -1069,4 +1069,178 @@ mod tests {
             "Long fragment should have higher weight"
         );
     }
+
+    #[test]
+    fn test_default_constructor_matches_new() {
+        let a = LogMatcher::new();
+        let b = LogMatcher::default();
+        assert_eq!(a.get_all_templates().len(), b.get_all_templates().len());
+        assert_eq!(a.optimal_batch_size(), b.optimal_batch_size());
+    }
+
+    #[test]
+    fn test_with_config_picks_up_overrides() {
+        let cfg = MatcherConfig::new()
+            .with_batch_size(123)
+            .with_min_fragment_length(7);
+        let m = LogMatcher::with_config(cfg);
+        assert_eq!(m.config().min_fragment_length, 7);
+        assert_eq!(m.optimal_batch_size(), 123);
+    }
+
+    #[test]
+    fn test_set_next_template_id() {
+        // Bumping the counter changes what the (currently dead-code) helper
+        // would return. Test via the public setter; the internal getter
+        // is only reachable through cloning the snapshot.
+        let m = LogMatcher::new();
+        m.set_next_template_id(9_999);
+        // Round-trip via save_to_file → load_from_file preserves it.
+        let path = std::env::temp_dir().join("log_matcher_state_test.bin");
+        m.save_to_file(path.to_str().unwrap()).unwrap();
+        let loaded = LogMatcher::load_from_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.next_template_id.load(Ordering::SeqCst), 9_999);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_save_and_load_bincode_round_trip() {
+        let m = LogMatcher::new();
+        add_demo_templates(&m);
+        let path = std::env::temp_dir().join("log_matcher_round_trip.bin");
+        m.save_to_file(path.to_str().unwrap()).unwrap();
+        let loaded = LogMatcher::load_from_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.get_all_templates().len(), 3);
+        // Loaded matcher must still match the same logs.
+        assert_eq!(
+            loaded.match_log("cpu_usage: 55.5% - ok"),
+            Some(1)
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_save_and_load_json_round_trip() {
+        let m = LogMatcher::new();
+        add_demo_templates(&m);
+        let path = std::env::temp_dir().join("log_matcher_round_trip.json");
+        m.save_to_json(path.to_str().unwrap()).unwrap();
+        let loaded = LogMatcher::load_from_json(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.get_all_templates().len(), 3);
+        assert_eq!(
+            loaded.match_log("memory_usage: 4.0GB - ok"),
+            Some(2)
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_load_from_file_missing_returns_error() {
+        let result = LogMatcher::load_from_file("/no/such/path/here.bin");
+        assert!(result.is_err());
+        let result = LogMatcher::load_from_json("/no/such/path/here.json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_clone_makes_independent_snapshot() {
+        let m = LogMatcher::new();
+        add_demo_templates(&m);
+        let cloned = m.clone();
+        // Clone has the same templates.
+        assert_eq!(cloned.get_all_templates().len(), 3);
+        // Adding to the clone doesn't change the original.
+        cloned.add_template(LogTemplate {
+            template_id: 999,
+            pattern: r"new_metric: (\d+)".to_string(),
+            variables: vec!["v".into()],
+            example: "new_metric: 5".into(),
+        });
+        assert_eq!(m.get_all_templates().len(), 3);
+        assert_eq!(cloned.get_all_templates().len(), 4);
+    }
+
+    #[test]
+    fn test_match_batch_parallel_matches_serial_results() {
+        // For the same input, the parallel batch must return the same
+        // result vector as serial. (Order is preserved per docs.)
+        let m = LogMatcher::new();
+        add_demo_templates(&m);
+        let logs: Vec<String> = (0..600)
+            .map(|i| format!("cpu_usage: {i}.0% - x"))
+            .collect();
+        let logs_ref: Vec<&str> = logs.iter().map(|s| s.as_str()).collect();
+        let serial = m.match_batch(&logs_ref);
+        let parallel = m.match_batch_parallel(&logs_ref);
+        assert_eq!(serial, parallel);
+        // All should match cpu_usage template (id=1).
+        assert!(parallel.iter().all(|x| *x == Some(1)));
+    }
+
+    #[test]
+    fn test_match_batch_parallel_empty_input() {
+        let m = LogMatcher::new();
+        let result = m.match_batch_parallel(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_all_templates_returns_clones() {
+        let m = LogMatcher::new();
+        add_demo_templates(&m);
+        let templates = m.get_all_templates();
+        assert_eq!(templates.len(), 3);
+        let ids: std::collections::HashSet<u64> = templates.iter().map(|t| t.template_id).collect();
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+        assert!(ids.contains(&3));
+    }
+
+    #[test]
+    fn test_log_template_serde_round_trip() {
+        let t = LogTemplate {
+            template_id: 42,
+            pattern: r"test (\d+)".to_string(),
+            variables: vec!["v".to_string()],
+            example: "test 1".to_string(),
+        };
+        let bytes = bincode::serialize(&t).unwrap();
+        let back: LogTemplate = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(back.template_id, 42);
+        assert_eq!(back.pattern, r"test (\d+)");
+    }
+
+    #[test]
+    fn test_is_generic_fragment_classification() {
+        // Very-short fragments (after trim) are generic.
+        assert!(is_generic_fragment("ab"));
+        assert!(is_generic_fragment("   "));
+        // Fragments containing syslog field substrings (e.g. "uid=" because
+        // the pattern list has "id=") are generic if the fragment is short.
+        assert!(is_generic_fragment("id="));
+        assert!(is_generic_fragment("name="));
+        // Distinctive long structural fragments are not.
+        assert!(!is_generic_fragment("sshd(pam_unix)["));
+    }
+
+    #[test]
+    fn test_has_distinctive_markers_recognizes_brackets_and_paren() {
+        // Fragments containing distinctive structural punctuation
+        // ('[', '(', ']:', etc.) get a bonus in the weight scorer.
+        assert!(has_distinctive_markers("sshd(pam_unix)["));
+        assert!(has_distinctive_markers("]: failure"));
+        assert!(!has_distinctive_markers(" "));
+    }
+
+    #[test]
+    fn test_extract_fragments_respects_min_length() {
+        // With min_length=3, single-character splits are dropped.
+        let fragments = extract_fragments(r"a (\w+) b (\d+) c", 3);
+        // "a " "b " "c" — none of these meet len >= 3 by themselves once
+        // surrounding whitespace is split out. Verify no empty fragments
+        // and that the function doesn't panic on edge inputs.
+        for f in &fragments {
+            assert!(f.len() >= 3, "fragment {f:?} below min_length");
+        }
+    }
 }
