@@ -342,4 +342,136 @@ mod tests {
         let signature = extract_template_signature(&tokens);
         assert_eq!(signature, "sshd authentication failure <User> <Location>");
     }
+
+    #[test]
+    fn test_classify_empty_token_is_static() {
+        // Empty tokens are classified as Static so they don't perturb
+        // the parameter clustering — surprising but documented behavior.
+        assert_eq!(classify_token("", None), TokenClass::Static);
+    }
+
+    #[test]
+    fn test_ephemeral_ipv6() {
+        assert_eq!(
+            classify_token("::1", None),
+            TokenClass::Ephemeral
+        );
+        assert_eq!(
+            classify_token("fe80::1234", None),
+            TokenClass::Ephemeral
+        );
+        assert_eq!(
+            classify_token("2001:db8::1", None),
+            TokenClass::Ephemeral
+        );
+    }
+
+    #[test]
+    fn test_ephemeral_iso_dates_and_us_dates() {
+        assert_eq!(classify_token("2024-01-15", None), TokenClass::Ephemeral);
+        assert_eq!(classify_token("01/15/2024", None), TokenClass::Ephemeral);
+    }
+
+    #[test]
+    fn test_ephemeral_hex_with_0x_prefix_and_long_hex() {
+        // 0x-prefixed: any length
+        assert_eq!(classify_token("0xdeadbeef", None), TokenClass::Ephemeral);
+        // Long hex without 0x: > 8 hex chars
+        assert_eq!(classify_token("abcdef0123", None), TokenClass::Ephemeral);
+        // Short hex without 0x: parameter, not ephemeral
+        assert!(matches!(
+            classify_token("abcd", None),
+            TokenClass::Parameter(_)
+        ));
+    }
+
+    #[test]
+    fn test_ephemeral_milliseconds_timestamp() {
+        // 10+ digit pure number → epoch-ish timestamp
+        assert_eq!(classify_token("1700000000000", None), TokenClass::Ephemeral);
+    }
+
+    #[test]
+    fn test_classify_parameter_context_resource() {
+        let tok = classify_token("payments", Some("table="));
+        assert!(matches!(
+            tok,
+            TokenClass::Parameter(ParameterType::Resource)
+        ));
+    }
+
+    #[test]
+    fn test_classify_parameter_context_action() {
+        let tok = classify_token("rejected", Some("status="));
+        assert!(matches!(tok, TokenClass::Parameter(ParameterType::Action)));
+    }
+
+    #[test]
+    fn test_classify_parameter_context_location() {
+        let tok = classify_token("alpha", Some("server="));
+        assert!(matches!(
+            tok,
+            TokenClass::Parameter(ParameterType::Location)
+        ));
+    }
+
+    #[test]
+    fn test_classify_parameter_path_resource_no_context() {
+        // Even without context, leading-/ tokens are paths. Use a path
+        // that doesn't contain any service-name substring (sshd, nginx,
+        // mysql, etc.) — those would short-circuit to Static via the
+        // is_static_keyword `lower.contains(service)` check.
+        assert!(matches!(
+            classify_token("/data/files", None),
+            TokenClass::Parameter(ParameterType::Resource)
+        ));
+    }
+
+    #[test]
+    fn test_classify_parameter_status_codes_action_no_context() {
+        for code in ["200", "404", "500", "ERR_FOO", "OKAY"] {
+            // 200/404/500 hit the ephemeral-pure-number gate first; only
+            // "ERR_*" / "OK*" reach the Action branch without context.
+            let cls = classify_token(code, None);
+            if code.chars().all(|c| c.is_numeric()) {
+                assert_eq!(cls, TokenClass::Ephemeral, "{code}");
+            } else {
+                assert!(matches!(cls, TokenClass::Parameter(ParameterType::Action)),
+                    "{code} → {cls:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_classify_parameter_user_keywords() {
+        for u in ["root", "admin", "guest", "rooted", "adminstrator"] {
+            assert!(matches!(
+                classify_token(u, None),
+                TokenClass::Parameter(ParameterType::User)
+            ), "{u}");
+        }
+    }
+
+    #[test]
+    fn test_classify_parameter_generic_fallback() {
+        // Token with no static / ephemeral / context / heuristic match —
+        // falls through to Generic.
+        assert!(matches!(
+            classify_token("randomvalue", None),
+            TokenClass::Parameter(ParameterType::Generic)
+        ));
+    }
+
+    #[test]
+    fn test_template_signature_skips_ephemeral() {
+        // Ephemeral entries must not appear in the template signature.
+        let tokens = vec![
+            ("12345", TokenClass::Ephemeral),
+            ("Jun", TokenClass::Ephemeral),
+            ("authentication", TokenClass::Static),
+        ];
+        let sig = extract_template_signature(&tokens);
+        assert!(!sig.contains("<E>")); // sentinel must never be emitted
+        assert_eq!(sig, "authentication");
+    }
 }

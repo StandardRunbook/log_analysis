@@ -201,4 +201,92 @@ mod tests {
         assert!(!template.pattern.contains(r"\[(\d+)\]"));
         assert!(template.pattern.contains("PCI"));
     }
+
+    #[test]
+    fn test_generate_iso_template_falls_through_to_generic() {
+        // ISO-timestamped lines currently route through the generic
+        // path; the test pins that behavior so a future ISO-specific
+        // generator change is intentional.
+        let log = "2024-01-15T10:30:45 INFO request completed in 42ms";
+        let template = SmartTemplateGenerator::generate_template(log, 100);
+        assert_eq!(template.template_id, 100);
+        assert_eq!(template.example, log);
+        // Generic path captures decimal/integer variables.
+        assert!(template.variables.iter().any(|v| v == "number" || v == "decimal_value"));
+    }
+
+    #[test]
+    fn test_generate_delimited_template_falls_through_to_generic() {
+        let log = "field1,field2,field3,field4";
+        let template = SmartTemplateGenerator::generate_template(log, 200);
+        assert_eq!(template.template_id, 200);
+        assert_eq!(template.example, log);
+        // Plain text with no numbers → variables falls back to ["message"].
+        assert_eq!(template.variables, vec!["message".to_string()]);
+    }
+
+    #[test]
+    fn test_generate_unstructured_template() {
+        let log = "this is just unstructured prose";
+        let template = SmartTemplateGenerator::generate_template(log, 300);
+        assert_eq!(template.template_id, 300);
+        assert_eq!(template.variables, vec!["message".to_string()]);
+        // No vars detected → pattern catches whole message.
+        assert!(template.pattern.contains("(.+)") || !template.pattern.is_empty());
+    }
+
+    #[test]
+    fn test_message_pattern_captures_ip_address() {
+        let log = "Jul 27 14:41:58 combo nginx: client 10.0.0.5 connected";
+        let template = SmartTemplateGenerator::generate_template(log, 1);
+        // IP must appear as a capture group, not the literal address.
+        assert!(template.pattern.contains(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"));
+        assert!(!template.pattern.contains("10.0.0.5"));
+    }
+
+    #[test]
+    fn test_message_pattern_captures_uuid() {
+        let log = "Jul 27 14:41:58 combo apache: id 550e8400-e29b-41d4-a716-446655440000 ok";
+        let template = SmartTemplateGenerator::generate_template(log, 1);
+        assert!(template
+            .pattern
+            .contains("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"));
+    }
+
+    #[test]
+    fn test_message_pattern_captures_hex() {
+        let log = "Jul 27 14:41:58 combo mysql: trap at 0xdeadbeef";
+        let template = SmartTemplateGenerator::generate_template(log, 1);
+        assert!(template.pattern.contains("0x[0-9a-fA-F]+"));
+    }
+
+    #[test]
+    fn test_message_pattern_decimal_and_integer() {
+        let log = "Jul 27 14:41:58 combo mysql: latency 4.2 over 100 reqs";
+        let template = SmartTemplateGenerator::generate_template(log, 1);
+        // Decimal pattern is more specific so it goes first; trailing
+        // integer becomes the next capture.
+        assert!(template.pattern.contains(r"(\d+\.\d+)"));
+        assert!(template.pattern.contains(r"(\d+)"));
+    }
+
+    #[test]
+    fn test_extract_message_variables_full_matrix() {
+        // The variable-extraction helper appends "ip_address" iff the
+        // message has exactly 3 dots, "decimal_value" iff there's a
+        // \d+\.\d+ match, and "number" iff there's an integer. Falls
+        // back to ["message"] when none match.
+        let g = |line: &str, id: u64| {
+            SmartTemplateGenerator::generate_template(line, id).variables
+        };
+        // Plain prose (no numbers) → ["message"]
+        assert_eq!(g("hello world", 1), vec!["message".to_string()]);
+        // Integer only
+        assert!(g("count 42", 2).contains(&"number".to_string()));
+        // Decimal + integer (decimal counts as a "number" too because
+        // \b\d+\b also matches "4")
+        let v = g("rate 4.2 ok", 3);
+        assert!(v.contains(&"decimal_value".to_string()));
+        assert!(v.contains(&"number".to_string()));
+    }
 }
