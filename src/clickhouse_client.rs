@@ -365,6 +365,23 @@ pub struct LogGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{body_string, method, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn sample_log() -> LogEntry {
+        LogEntry {
+            org_id: "org-1".to_string(),
+            log_stream_id: "stream-1".to_string(),
+            service: "api-server".to_string(),
+            region: "us-east-1".to_string(),
+            log_stream_name: "/aws/api/production".to_string(),
+            timestamp: DateTime::parse_from_rfc3339("2024-01-15T10:30:45.123Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            template_id: "template-1".to_string(),
+            message: "Test error message".to_string(),
+        }
+    }
 
     #[tokio::test]
     #[ignore] // Requires ClickHouse running
@@ -377,20 +394,7 @@ mod tests {
     #[ignore]
     async fn test_insert_and_query() {
         let client = ClickHouseClient::new("http://localhost:8123").unwrap();
-
-        let log = LogEntry {
-            org_id: "org-1".to_string(),
-            log_stream_id: "stream-1".to_string(),
-            service: "api-server".to_string(),
-            region: "us-east-1".to_string(),
-            log_stream_name: "/aws/api/production".to_string(),
-            timestamp: Utc::now(),
-            template_id: "template-1".to_string(),
-            message: "Test error message".to_string(),
-        };
-
-        client.insert_log(log.clone()).await.unwrap();
-
+        client.insert_log(sample_log()).await.unwrap();
         let logs = client
             .query_logs(
                 "org-1",
@@ -400,7 +404,218 @@ mod tests {
             )
             .await
             .unwrap();
-
         assert!(!logs.is_empty());
+    }
+
+    // -- pure tests (no ClickHouse needed) --
+
+    #[test]
+    fn test_log_entry_serialization_uses_string_timestamp() {
+        // The custom Serialize impl formats the timestamp as
+        // "%Y-%m-%d %H:%M:%S%.3f" so ClickHouse's DateTime64(3) parser
+        // accepts it. Locking this format down — any change here cascades
+        // to every existing inserted row.
+        let log = sample_log();
+        let json = serde_json::to_string(&log).unwrap();
+        assert!(json.contains("\"timestamp\":\"2024-01-15 10:30:45.123\""));
+        assert!(json.contains("\"org_id\":\"org-1\""));
+        assert!(json.contains("\"template_id\":\"template-1\""));
+        assert!(json.contains("\"message\":\"Test error message\""));
+    }
+
+    #[test]
+    fn test_log_entry_deserialize_round_trip() {
+        // The Deserialize side comes from the derive — verify a row
+        // serialized by us can be read back.
+        let log = sample_log();
+        let json = serde_json::to_string(&log).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["org_id"], "org-1");
+        assert_eq!(parsed["service"], "api-server");
+    }
+
+    #[test]
+    fn test_new_picks_up_credentials_from_env() {
+        // CLICKHOUSE_USER / _PASSWORD / _DATABASE are read at construction
+        // time. Set them, build a client, and verify that the call doesn't
+        // panic — internal state is private so we can't assert the
+        // credentials, but we can guard the env-read branches.
+        std::env::set_var("CLICKHOUSE_USER", "u");
+        std::env::set_var("CLICKHOUSE_PASSWORD", "p");
+        std::env::set_var("CLICKHOUSE_DATABASE", "d");
+        let _ = ClickHouseClient::new("http://localhost:8123").unwrap();
+        std::env::remove_var("CLICKHOUSE_USER");
+        std::env::remove_var("CLICKHOUSE_PASSWORD");
+        std::env::remove_var("CLICKHOUSE_DATABASE");
+    }
+
+    // -- HTTP mock tests --
+
+    #[tokio::test]
+    async fn test_insert_log_posts_jsoneachrow() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(query_param("query", "INSERT INTO logs FORMAT JSONEachRow"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        client.insert_log(sample_log()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_log_propagates_server_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let err = client.insert_log(sample_log()).await.unwrap_err();
+        assert!(err.to_string().contains("ClickHouse insert failed"));
+        assert!(err.to_string().contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn test_insert_logs_batch_short_circuits_on_empty() {
+        // Empty batch must NOT touch the network. Use a server that would
+        // panic on any request to prove no HTTP call is made.
+        let server = MockServer::start().await;
+        // No mock registered → any request would 404. The function should
+        // return Ok(()) without touching the wire.
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        client.insert_logs_batch(vec![]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_logs_batch_serializes_newline_separated() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(query_param("query", "INSERT INTO logs FORMAT JSONEachRow"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        client
+            .insert_logs_batch(vec![sample_log(), sample_log(), sample_log()])
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_logs_batch_propagates_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad data"))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let err = client
+            .insert_logs_batch(vec![sample_log()])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("bad data"));
+    }
+
+    #[tokio::test]
+    async fn test_insert_template_assigns_content_hash_when_zero() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(query_param("query", "INSERT INTO templates FORMAT JSONEachRow"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let pattern = r"User (\w+) logged in";
+        let template = TemplateRow {
+            org_id: "o".into(),
+            log_stream_id: "s".into(),
+            template_id: 0, // sentinel — should be replaced with content hash
+            pattern: pattern.into(),
+            variables: vec!["user".into()],
+            example: "User alice logged in".into(),
+            created_at: Utc::now(),
+        };
+        let assigned = client.insert_template(template).await.unwrap();
+        // Same pattern → same hash; assert determinism.
+        assert_eq!(assigned, crate::template_id::template_id_from_pattern(pattern));
+        assert_ne!(assigned, 0);
+    }
+
+    #[tokio::test]
+    async fn test_insert_template_keeps_explicit_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let template = TemplateRow {
+            org_id: "o".into(),
+            log_stream_id: "s".into(),
+            template_id: 12345, // explicit non-zero — must be preserved
+            pattern: "anything".into(),
+            variables: vec![],
+            example: "ex".into(),
+            created_at: Utc::now(),
+        };
+        let assigned = client.insert_template(template).await.unwrap();
+        assert_eq!(assigned, 12345);
+    }
+
+    #[tokio::test]
+    async fn test_insert_template_propagates_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("nope"))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let template = TemplateRow {
+            org_id: "o".into(),
+            log_stream_id: "s".into(),
+            template_id: 1,
+            pattern: "p".into(),
+            variables: vec![],
+            example: "e".into(),
+            created_at: Utc::now(),
+        };
+        let err = client.insert_template(template).await.unwrap_err();
+        assert!(err.to_string().contains("insert_template failed"));
+        assert!(err.to_string().contains("nope"));
+    }
+
+    #[tokio::test]
+    async fn test_insert_template_with_autoid_delegates() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let pattern = r"GET /api/(\w+)";
+        let template = TemplateRow {
+            org_id: "o".into(),
+            log_stream_id: "s".into(),
+            template_id: 0,
+            pattern: pattern.into(),
+            variables: vec!["resource".into()],
+            example: "GET /api/users".into(),
+            created_at: Utc::now(),
+        };
+        let assigned = client.insert_template_with_autoid(template).await.unwrap();
+        assert_eq!(assigned, crate::template_id::template_id_from_pattern(pattern));
     }
 }

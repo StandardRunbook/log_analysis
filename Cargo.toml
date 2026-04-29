@@ -85,3 +85,6 @@ opentelemetry = "0.22"
 opentelemetry-otlp = "0.15"
 opentelemetry_sdk = { version = "0.22", features = ["logs", "rt-tokio"] }
 opentelemetry-proto = { version = "0.7", features = ["gen-tonic", "logs"] }
+
+[dev-dependencies]
+wiremock = "0.6.5"

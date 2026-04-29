@@ -325,4 +325,108 @@ mod tests {
         assert_eq!(stats.train_templates, 3);
         assert_eq!(stats.test_templates, 3);
     }
+
+    fn make_ds(logs_len: usize, templates: usize) -> InMemoryDataset {
+        let logs: Vec<String> = (0..logs_len).map(|i| format!("log{i}")).collect();
+        let ground_truth: Vec<GroundTruthEntry> = (0..logs_len)
+            .map(|i| GroundTruthEntry {
+                log_line: format!("log{i}"),
+                event_id: format!("E{}", i % templates),
+                expected_template: None,
+            })
+            .collect();
+        InMemoryDataset::new("test", logs, ground_truth)
+    }
+
+    #[test]
+    fn test_split_size_mismatch_returns_error() {
+        // Construct a dataset with mismatched logs / ground-truth counts.
+        let dataset = InMemoryDataset::new(
+            "bad",
+            vec!["a".into(), "b".into()],
+            vec![GroundTruthEntry {
+                log_line: "a".into(),
+                event_id: "E1".into(),
+                expected_template: None,
+            }],
+        );
+        let result = split_dataset(&dataset, &SplitConfig::default());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("size mismatch"));
+    }
+
+    #[test]
+    fn test_default_config() {
+        let cfg = SplitConfig::default();
+        assert_eq!(cfg.train_ratio, 0.8);
+        assert_eq!(cfg.seed, 42);
+        assert!(cfg.stratified);
+        assert_eq!(cfg.min_test_samples, 1);
+    }
+
+    #[test]
+    fn test_split_stats_ratios_sum_to_one() {
+        let dataset = make_ds(20, 4);
+        let split = split_dataset(&dataset, &SplitConfig::default()).unwrap();
+        let s = split.stats();
+        assert!((s.train_ratio() + s.test_ratio() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_random_split_is_reproducible_with_same_seed() {
+        let dataset = make_ds(100, 5);
+        let cfg = SplitConfig {
+            train_ratio: 0.7,
+            seed: 1234,
+            stratified: false,
+            min_test_samples: 1,
+        };
+        let s1 = split_dataset(&dataset, &cfg).unwrap();
+        let s2 = split_dataset(&dataset, &cfg).unwrap();
+        assert_eq!(s1.train_logs, s2.train_logs);
+        assert_eq!(s1.test_logs, s2.test_logs);
+    }
+
+    #[test]
+    fn test_stratified_min_test_samples_honored() {
+        // With min_test_samples=2 every template must contribute at
+        // least 2 entries to the test set.
+        let dataset = make_ds(60, 3);
+        let cfg = SplitConfig {
+            train_ratio: 0.9,
+            seed: 1,
+            stratified: true,
+            min_test_samples: 2,
+        };
+        let split = split_dataset(&dataset, &cfg).unwrap();
+        let mut per_template: HashMap<String, usize> = HashMap::new();
+        for e in &split.test_ground_truth {
+            *per_template.entry(e.event_id.clone()).or_insert(0) += 1;
+        }
+        for count in per_template.values() {
+            assert!(*count >= 2, "got per-template counts {per_template:?}");
+        }
+    }
+
+    #[test]
+    fn test_stats_total_templates_is_union() {
+        // Construct two-set membership: train has E1,E2; test has E2,E3.
+        // total_templates should be |union| = 3.
+        let split = DatasetSplit {
+            train_logs: vec!["a".into(), "b".into()],
+            train_ground_truth: vec![
+                GroundTruthEntry { log_line: "a".into(), event_id: "E1".into(), expected_template: None },
+                GroundTruthEntry { log_line: "b".into(), event_id: "E2".into(), expected_template: None },
+            ],
+            test_logs: vec!["c".into(), "d".into()],
+            test_ground_truth: vec![
+                GroundTruthEntry { log_line: "c".into(), event_id: "E2".into(), expected_template: None },
+                GroundTruthEntry { log_line: "d".into(), event_id: "E3".into(), expected_template: None },
+            ],
+        };
+        let stats = split.stats();
+        assert_eq!(stats.train_templates, 2);
+        assert_eq!(stats.test_templates, 2);
+        assert_eq!(stats.total_templates, 3); // union {E1,E2,E3}
+    }
 }
