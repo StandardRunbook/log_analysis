@@ -245,7 +245,7 @@ async fn test_openstack_grouping_accuracy() {
     // Show ground truth groups and how we split them
     println!("🔍 Top ground truth groups and our template assignments:");
     let mut gt_group_sizes: Vec<_> = gt_to_predicted.iter().collect();
-    gt_group_sizes.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    gt_group_sizes.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
 
     for (gt_event, template_ids) in gt_group_sizes.iter().take(10) {
         let mut counts: HashMap<u64, usize> = HashMap::new();
