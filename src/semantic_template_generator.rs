@@ -281,4 +281,91 @@ mod tests {
         assert_eq!(infer_parameter_type("15:16:01"), "time");
         assert_eq!(infer_parameter_type("Jun"), "month");
     }
+
+    #[test]
+    fn test_infer_parameter_type_falls_back_to_value() {
+        // Anything that doesn't match the specific patterns lands as "value".
+        assert_eq!(infer_parameter_type("alphabetic"), "value");
+        assert_eq!(infer_parameter_type("zzz"), "value");
+    }
+
+    #[test]
+    fn test_classify_tokens_dedupes_parameter_types() {
+        // Two parameters of the same type collapse to one entry — the
+        // template tracks types, not occurrences.
+        let tokens = vec!["10.0.0.1", "10.0.0.2", "10.0.0.3"];
+        let (_kw, params) = classify_tokens(&tokens);
+        assert_eq!(params, vec!["ip_address".to_string()]);
+    }
+
+    #[test]
+    fn test_is_likely_parameter_rejects_short_words() {
+        // 1- and 2-char tokens are pruned (treated as keywords/glue).
+        // Verify via classify_tokens that these don't emerge as
+        // parameter types.
+        let tokens = vec!["at", "by", "x"];
+        let (_kw, params) = classify_tokens(&tokens);
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn test_classify_tokens_path_param() {
+        let tokens = vec!["/var/lib/foo"];
+        let (_kw, params) = classify_tokens(&tokens);
+        assert!(params.iter().any(|p| p == "path"));
+    }
+
+    #[test]
+    fn test_classify_tokens_picks_up_pid_as_number() {
+        let tokens = vec!["12345"];
+        let (_kw, params) = classify_tokens(&tokens);
+        assert_eq!(params, vec!["number".to_string()]);
+    }
+
+    #[test]
+    fn test_tokenize_empty_string() {
+        assert_eq!(tokenize(""), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn test_tokenize_no_delimiters() {
+        // No delimiters → the whole string is one token.
+        assert_eq!(tokenize("singletoken"), vec!["singletoken"]);
+    }
+
+    #[test]
+    fn test_semantic_template_serde_round_trip() {
+        // Serializing/deserializing via serde must preserve every field.
+        let t = SemanticTemplate {
+            template_id: 42,
+            description: "auth failure".into(),
+            identifying_keywords: vec!["authentication".into(), "failure".into()],
+            parameters: vec!["username".into(), "ip_address".into()],
+            example: "sshd: auth failure".into(),
+            pattern: Some(r"\bauth\b".into()),
+        };
+        let json = serde_json::to_string(&t).unwrap();
+        let back: SemanticTemplate = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.template_id, 42);
+        assert_eq!(back.identifying_keywords.len(), 2);
+        assert_eq!(back.parameters.len(), 2);
+        assert_eq!(back.pattern.as_deref(), Some(r"\bauth\b"));
+    }
+
+    #[test]
+    fn test_semantic_match_round_trip() {
+        let mut params = HashMap::new();
+        params.insert("username".to_string(), "alice".to_string());
+        params.insert("ip_address".to_string(), "10.0.0.1".to_string());
+        let m = SemanticMatch {
+            template_id: 7,
+            parameters: params,
+            confidence: 0.95,
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        let back: SemanticMatch = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.template_id, 7);
+        assert_eq!(back.parameters.get("username").map(|s| s.as_str()), Some("alice"));
+        assert!((back.confidence - 0.95).abs() < 1e-9);
+    }
 }

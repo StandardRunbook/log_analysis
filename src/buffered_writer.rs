@@ -165,3 +165,175 @@ async fn flush(clickhouse: &ClickHouseClient, logs: Vec<LogEntry>, trigger: &str
         error!("Failed to flush {} logs to ClickHouse: {}", count, e);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn entry(id: usize) -> LogEntry {
+        LogEntry {
+            org_id: "o".into(),
+            log_stream_id: "s".into(),
+            service: "svc".into(),
+            region: "r".into(),
+            log_stream_name: "n".into(),
+            timestamp: Utc::now(),
+            template_id: format!("t{id}"),
+            message: format!("msg-{id}"),
+        }
+    }
+
+    /// Stand up a wiremock server that 200s every POST and counts how
+    /// many times each insert_logs_batch hit it. Returns the server +
+    /// the per-flush hit counter.
+    async fn ch_server() -> (MockServer, std::sync::Arc<AtomicUsize>) {
+        let server = MockServer::start().await;
+        let counter = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter_for_mock = counter.clone();
+        Mock::given(method("POST"))
+            .respond_with(move |_: &wiremock::Request| {
+                counter_for_mock.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200)
+            })
+            .mount(&server)
+            .await;
+        (server, counter)
+    }
+
+    #[tokio::test]
+    async fn write_batch_with_empty_vec_is_a_noop() {
+        let (server, hits) = ch_server().await;
+        let ch = Arc::new(ClickHouseClient::new(&server.uri()).unwrap());
+        let writer = Arc::new(BufferedClickHouseWriter::new(
+            ch,
+            10,
+            Duration::from_secs(60),
+        ));
+        let _handle = writer.clone().start_background_flusher();
+
+        writer.write_batch(vec![]).await; // empty
+
+        // Give the writer a moment to wake up; it should not have flushed.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn size_trigger_flushes_when_threshold_reached() {
+        let (server, hits) = ch_server().await;
+        let ch = Arc::new(ClickHouseClient::new(&server.uri()).unwrap());
+        // batch size 3, very long interval so only the size trigger fires.
+        let writer = Arc::new(BufferedClickHouseWriter::new(
+            ch,
+            3,
+            Duration::from_secs(60),
+        ));
+        let _handle = writer.clone().start_background_flusher();
+
+        // Send 3 entries split across two batches; cumulative ≥ 3 → flush.
+        writer.write_batch(vec![entry(1), entry(2)]).await;
+        writer.write_batch(vec![entry(3)]).await;
+
+        // Poll for the flush — one POST expected.
+        for _ in 0..50 {
+            if hits.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(hits.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn time_trigger_flushes_partial_batch() {
+        let (server, hits) = ch_server().await;
+        let ch = Arc::new(ClickHouseClient::new(&server.uri()).unwrap());
+        // huge batch size so only the time trigger fires.
+        let writer = Arc::new(BufferedClickHouseWriter::new(
+            ch,
+            10_000,
+            Duration::from_millis(80),
+        ));
+        let _handle = writer.clone().start_background_flusher();
+
+        writer.write(entry(1)).await; // single entry — under size threshold
+
+        // Wait for the time trigger to fire at least once.
+        for _ in 0..50 {
+            if hits.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        assert!(hits.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn write_single_record_via_write_method() {
+        // The non-batched write() helper wraps a single record in a Vec
+        // and routes through write_batch. Verifying both code paths.
+        let (server, hits) = ch_server().await;
+        let ch = Arc::new(ClickHouseClient::new(&server.uri()).unwrap());
+        let writer = Arc::new(BufferedClickHouseWriter::new(
+            ch,
+            1, // size 1 → flush immediately
+            Duration::from_secs(60),
+        ));
+        let _handle = writer.clone().start_background_flusher();
+
+        writer.write(entry(1)).await;
+
+        for _ in 0..50 {
+            if hits.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(hits.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn flush_does_not_panic_on_clickhouse_error() {
+        // ClickHouse returns 500; the writer should log and keep going,
+        // not poison the channel or panic the task.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let ch = Arc::new(ClickHouseClient::new(&server.uri()).unwrap());
+        let writer = Arc::new(BufferedClickHouseWriter::new(
+            ch,
+            1,
+            Duration::from_secs(60),
+        ));
+        let _handle = writer.clone().start_background_flusher();
+
+        writer.write(entry(1)).await;
+
+        // Give the failing flush time to complete; sender should still
+        // be usable for subsequent writes.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        writer.write(entry(2)).await; // must not panic
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "start_background_flusher called more than once")]
+    async fn double_start_panics() {
+        let (server, _) = ch_server().await;
+        let ch = Arc::new(ClickHouseClient::new(&server.uri()).unwrap());
+        let writer = Arc::new(BufferedClickHouseWriter::new(
+            ch,
+            10,
+            Duration::from_secs(60),
+        ));
+        let _h1 = writer.clone().start_background_flusher();
+        // The second call must panic because the receiver was already taken.
+        let _h2 = writer.clone().start_background_flusher();
+    }
+}
