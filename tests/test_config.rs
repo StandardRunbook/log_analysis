@@ -68,7 +68,7 @@ fn test_bulk_processing_config() {
 fn test_config_affects_matching() {
     // Create matcher with min fragment length 5
     let config = MatcherConfig::new().with_min_fragment_length(5);
-    let mut matcher = LogMatcher::with_config(config);
+    let matcher = LogMatcher::with_config(config);
 
     // Add a template with short fragments (< 5 chars)
     matcher.add_template(LogTemplate {
@@ -84,7 +84,7 @@ fn test_config_affects_matching() {
     // Note: This will be None because the fragment is filtered out
 
     // Now with default config (min_fragment_length=2)
-    let mut matcher_default = LogMatcher::new();
+    let matcher_default = LogMatcher::new();
     matcher_default.add_template(LogTemplate {
         template_id: 100,
         pattern: r"err: (\d+)".to_string(),

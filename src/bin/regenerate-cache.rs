@@ -1,12 +1,11 @@
-/// Regenerate cache files with ClickHouse auto-increment IDs
-///
-/// Reads template JSON files, uploads to ClickHouse (which assigns unique IDs),
-/// then exports back to cache with new IDs
+//! Regenerate cache files with ClickHouse auto-increment IDs
+//!
+//! Reads template JSON files, uploads to ClickHouse (which assigns unique IDs),
+//! then exports back to cache with new IDs
 
 use anyhow::Result;
 use chrono::Utc;
 use log_analyzer::clickhouse_client::{ClickHouseClient, TemplateRow};
-use log_analyzer::log_matcher::LogTemplate;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;

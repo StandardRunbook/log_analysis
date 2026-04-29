@@ -1,7 +1,7 @@
-/// Fragment-based template generation:
-/// 1. Tokenize log into fragments using delimiter regex
-/// 2. Ask LLM to classify each fragment (timestamp, IP, number, static_text, etc.)
-/// 3. Build regex pattern from classified fragments
+//! Fragment-based template generation:
+//! 1. Tokenize log into fragments using delimiter regex
+//! 2. Ask LLM to classify each fragment (timestamp, IP, number, static_text, etc.)
+//! 3. Build regex pattern from classified fragments
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -92,7 +92,7 @@ Respond with ONLY the JSON array, no explanation."#,
 
         classifications
             .iter()
-            .map(|s| FragmentType::from_str(s))
+            .map(|s| s.parse::<FragmentType>())
             .collect()
     }
 
@@ -207,8 +207,10 @@ pub enum FragmentType {
     StaticText,
 }
 
-impl FragmentType {
-    pub fn from_str(s: &str) -> Result<Self, String> {
+impl std::str::FromStr for FragmentType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "timestamp" => Ok(FragmentType::Timestamp),
             "hostname" => Ok(FragmentType::Hostname),

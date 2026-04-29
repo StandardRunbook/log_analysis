@@ -1,6 +1,6 @@
-/// Sync cached templates to ClickHouse database
-///
-/// Reads template JSON files from cache/ directory and inserts them into the templates table
+//! Sync cached templates to ClickHouse database
+//!
+//! Reads template JSON files from cache/ directory and inserts them into the templates table
 
 use anyhow::Result;
 use chrono::Utc;

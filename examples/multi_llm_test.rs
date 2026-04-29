@@ -1,6 +1,6 @@
-/// Example demonstrating multi-LLM consensus
-///
-/// Run with: cargo run --example multi_llm_test
+//! Example demonstrating multi-LLM consensus
+//!
+//! Run with: cargo run --example multi_llm_test
 
 use log_analyzer::llm_config::{MultiLLMConfig, LLMProviderConfig, ConsensusStrategy};
 use log_analyzer::llm_service::LLMServiceClient;
@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
         min_agreement: 1,
     };
 
-    let multi_client = LLMServiceClient::new_with_config(multi_config)?;
+    let _multi_client = LLMServiceClient::new_with_config(multi_config)?;
     println!("Multi-LLM client configured successfully!");
 
     // Example 3: Test template generation (if Ollama is running)

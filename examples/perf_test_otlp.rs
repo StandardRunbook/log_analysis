@@ -1,20 +1,20 @@
-/// OTLP/gRPC version of the e2e perf test.
-///
-/// Sends batched ExportLogsServiceRequest payloads to the service's
-/// OTLP gRPC LogsService. Use this for apples-to-apples comparison
-/// against the JSON HTTP perf_test (same matcher, same writer, same
-/// ClickHouse — only the ingest framing differs).
-///
-/// Env vars:
-///   TOTAL_LOGS    — total log records to send (default 200000)
-///   BATCH_SIZE    — log records per gRPC request (default 1000)
-///   CONCURRENCY   — concurrent in-flight requests (default 32)
-///   OTLP_ENDPOINT — gRPC endpoint (default http://localhost:4317)
-///   CLICKHOUSE_URL — for delivery verification
-///   ORG_ID        — tenant id (default "perf-otlp")
-///   STREAM_ID     — log stream id (default "perf-stream")
-///
-/// Run with: cargo run --release --example perf_test_otlp
+//! OTLP/gRPC version of the e2e perf test.
+//!
+//! Sends batched ExportLogsServiceRequest payloads to the service's
+//! OTLP gRPC LogsService. Use this for apples-to-apples comparison
+//! against the JSON HTTP perf_test (same matcher, same writer, same
+//! ClickHouse — only the ingest framing differs).
+//!
+//! Env vars:
+//!   TOTAL_LOGS    — total log records to send (default 200000)
+//!   BATCH_SIZE    — log records per gRPC request (default 1000)
+//!   CONCURRENCY   — concurrent in-flight requests (default 32)
+//!   OTLP_ENDPOINT — gRPC endpoint (default http://localhost:4317)
+//!   CLICKHOUSE_URL — for delivery verification
+//!   ORG_ID        — tenant id (default "perf-otlp")
+//!   STREAM_ID     — log stream id (default "perf-stream")
+//!
+//! Run with: cargo run --release --example perf_test_otlp
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let org_id = std::env::var("ORG_ID").unwrap_or_else(|_| "perf-otlp".to_string());
     let stream_id = std::env::var("STREAM_ID").unwrap_or_else(|_| "perf-stream".to_string());
 
-    let total_requests = (total_logs + batch_size - 1) / batch_size;
+    let total_requests = total_logs.div_ceil(batch_size);
 
     println!("=== E2E OTLP/gRPC Perf Test ===");
     println!("otlp endpoint: {}", otlp_endpoint);

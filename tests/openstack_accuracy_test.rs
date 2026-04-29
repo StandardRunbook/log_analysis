@@ -21,17 +21,15 @@ fn load_ground_truth_structured(path: &str) -> Vec<(String, String)> {
         // Skip header
         lines.next();
 
-        for line in lines {
-            if let Ok(line) = line {
-                // Parse CSV to extract full log line and EventId
-                // Format: LineId,Logrecord,Date,Time,Pid,Level,Component,ADDR,Content,EventId,EventTemplate
-                let parts: Vec<&str> = line.splitn(11, ',').collect();
-                if parts.len() >= 10 {
-                    // Logrecord is at index 1 (full log line), EventId at index 9
-                    let log_line = parts[1].trim_matches('"').to_string();
-                    let event_id = parts[9].to_string();
-                    structured.push((log_line, event_id));
-                }
+        for line in lines.map_while(Result::ok) {
+            // Parse CSV to extract full log line and EventId
+            // Format: LineId,Logrecord,Date,Time,Pid,Level,Component,ADDR,Content,EventId,EventTemplate
+            let parts: Vec<&str> = line.splitn(11, ',').collect();
+            if parts.len() >= 10 {
+                // Logrecord is at index 1 (full log line), EventId at index 9
+                let log_line = parts[1].trim_matches('"').to_string();
+                let event_id = parts[9].to_string();
+                structured.push((log_line, event_id));
             }
         }
     }
@@ -44,10 +42,8 @@ fn load_raw_logs(path: &str) -> Vec<String> {
 
     if let Ok(file) = File::open(path) {
         let reader = BufReader::new(file);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                logs.push(line);
-            }
+        for line in reader.lines().map_while(Result::ok) {
+            logs.push(line);
         }
     }
 
@@ -128,7 +124,7 @@ async fn test_openstack_grouping_accuracy() {
                 Ok(new_template) => {
                     let tid = new_template.template_id;
                     {
-                        let mut m = matcher.write().await;
+                        let m = matcher.write().await;
                         m.add_template(new_template);
                     }
                     generated_templates += 1;
@@ -173,7 +169,7 @@ async fn test_openstack_grouping_accuracy() {
             if let Some(tid) = template_id {
                 gt_to_predicted
                     .entry(gt_event_id.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(*tid);
             }
         }
@@ -272,7 +268,7 @@ async fn test_openstack_grouping_accuracy() {
     println!("{}", "=".repeat(80));
 
     // Assert reasonable grouping accuracy (skip if no data)
-    if raw_logs.len() > 0 {
+    if !raw_logs.is_empty() {
         assert!(
             grouping_accuracy > 70.0,
             "Grouping accuracy should be > 70%, got {:.2}%",

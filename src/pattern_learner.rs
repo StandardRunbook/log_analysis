@@ -148,7 +148,7 @@ impl PatternLearner {
             let parts: Vec<&str> = t.value.split('-').collect();
             parts.len() == 5
         }) {
-            return VariableType::UUID;
+            return VariableType::Uuid;
         }
 
         // Default to generic string
@@ -242,7 +242,7 @@ enum VariableType {
     Number,
     IPAddress,
     HexNumber,
-    UUID,
+    Uuid,
     UnixTimestamp,
     String,
 }
@@ -253,7 +253,7 @@ impl VariableType {
             VariableType::Number => (r"(\d+)", "number".to_string()),
             VariableType::IPAddress => (r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", "ip_address".to_string()),
             VariableType::HexNumber => (r"(0x[0-9a-fA-F]+|[0-9a-fA-F]+)", "hex_number".to_string()),
-            VariableType::UUID => (r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", "uuid".to_string()),
+            VariableType::Uuid => (r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", "uuid".to_string()),
             VariableType::UnixTimestamp => (r"(\d{10,})", "timestamp".to_string()),
             VariableType::String => (r"(\S+)", "value".to_string()),
         }

@@ -1,6 +1,6 @@
-/// ClickHouse client for log storage
-///
-/// Provides high-performance log ingestion and querying using ClickHouse
+//! ClickHouse client for log storage
+//!
+//! Provides high-performance log ingestion and querying using ClickHouse
 
 use anyhow::Result;
 use clickhouse::Client;
@@ -281,7 +281,10 @@ impl ClickHouseClient {
         Ok(template.template_id)
     }
 
-    /// Get next available template ID from ClickHouse
+    /// Get next available template ID from ClickHouse. Currently unused —
+    /// template IDs are content-hashed rather than auto-incremented — kept
+    /// in case we revisit the auto-increment path.
+    #[allow(dead_code)]
     async fn get_next_template_id(&self) -> Result<u64> {
         #[derive(Debug, clickhouse::Row, Deserialize)]
         struct MaxIdRow {

@@ -173,7 +173,7 @@ fn calculate_accuracy(
             if let Some(tid) = template_id {
                 gt_to_predicted
                     .entry(gt_entry.event_id.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(*tid);
             }
         }

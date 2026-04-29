@@ -1,13 +1,13 @@
-/// Diagnostic: how many distinct patterns does the configured LLM produce,
-/// given one example log per ground-truth event type?
-///
-/// Bypasses the matcher entirely — calls the LLM on each log and content-hashes
-/// the canonical pattern. If the model produces ~43 distinct hashes for 43
-/// distinct event types, then the model is fine and any merging seen in the
-/// end-to-end test is the matcher's fragment-overlap threshold being too loose.
-/// If the model produces far fewer, the model/prompt is doing the merging.
-///
-/// Run with: cargo run --example llm_distinctness_test --release
+//! Diagnostic: how many distinct patterns does the configured LLM produce,
+//! given one example log per ground-truth event type?
+//!
+//! Bypasses the matcher entirely — calls the LLM on each log and content-hashes
+//! the canonical pattern. If the model produces ~43 distinct hashes for 43
+//! distinct event types, then the model is fine and any merging seen in the
+//! end-to-end test is the matcher's fragment-overlap threshold being too loose.
+//! If the model produces far fewer, the model/prompt is doing the merging.
+//!
+//! Run with: cargo run --example llm_distinctness_test --release
 
 use log_analyzer::llm_config::MultiLLMConfig;
 use log_analyzer::llm_service::LLMServiceClient;
@@ -23,7 +23,7 @@ fn load_one_log_per_event(csv_path: &str) -> BTreeMap<String, String> {
         let mut lines = reader.lines();
         lines.next(); // header
 
-        for line in lines.flatten() {
+        for line in lines.map_while(Result::ok) {
             let parts: Vec<&str> = line.splitn(11, ',').collect();
             if parts.len() < 10 {
                 continue;

@@ -119,7 +119,7 @@ pub fn canonicalize_pattern(pattern: &str) -> String {
             }
             '{' => {
                 // `{n,m}` quantifier if a digit follows; otherwise literal `{`
-                let is_quantifier = chars.peek().map_or(false, |c| c.is_ascii_digit());
+                let is_quantifier = chars.peek().is_some_and(|c| c.is_ascii_digit());
                 if is_quantifier {
                     for c in chars.by_ref() {
                         if c == '}' {

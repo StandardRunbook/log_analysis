@@ -142,7 +142,7 @@ impl MatcherSnapshot {
             for (frag_idx, &frag_id) in frag_ids.iter().enumerate() {
                 fragment_id_map
                     .entry(frag_id)
-                    .or_insert_with(SmallTemplateVec::new)
+                    .or_default()
                     .push((*tid, frag_idx));
             }
         }
@@ -403,7 +403,7 @@ fn calculate_fragment_weight(fragment: &str) -> f64 {
     let raw_score = length_score * content_score * generic_penalty * distinctive_bonus;
 
     // Clamp to [0.0, 1.0] range
-    raw_score.min(1.0).max(0.0)
+    raw_score.clamp(0.0, 1.0)
 }
 
 /// Check if fragment is a generic pattern (common across many log types)
@@ -496,7 +496,11 @@ impl LogMatcher {
         self.config.optimal_batch_size
     }
 
-    /// Generate next template ID
+    /// Generate next template ID. Currently unused — template IDs are
+    /// content-hashed (`template_id_from_pattern`) rather than
+    /// auto-incrementing, but the counter is kept for `set_next_template_id`
+    /// callers and for future migrations away from the hash scheme.
+    #[allow(dead_code)]
     fn next_id(&self) -> u64 {
         self.next_template_id.fetch_add(1, Ordering::SeqCst)
     }
@@ -858,7 +862,7 @@ mod tests {
 
     #[test]
     fn test_multiple_templates_same_prefix() {
-        let mut matcher = LogMatcher::new();
+        let matcher = LogMatcher::new();
 
         // Add multiple templates with the same "error: " prefix
         matcher.add_template(LogTemplate {
@@ -923,7 +927,7 @@ mod tests {
 
     #[test]
     fn test_multi_fragment_disambiguation() {
-        let mut matcher = LogMatcher::new();
+        let matcher = LogMatcher::new();
 
         // These patterns share the same prefix but differ in middle/suffix
         matcher.add_template(LogTemplate {

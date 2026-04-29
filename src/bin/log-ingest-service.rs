@@ -1,9 +1,9 @@
-/// Log Ingestion Service
-///
-/// Accepts logs from any source and writes them to ClickHouse with template matching.
-/// Port: 3002
-///
-/// Performance: 370K logs/sec with optimized template matching
+//! Log Ingestion Service
+//!
+//! Accepts logs from any source and writes them to ClickHouse with template matching.
+//! Port: 3002
+//!
+//! Performance: 370K logs/sec with optimized template matching
 
 use axum::{
     extract::{Json, State},

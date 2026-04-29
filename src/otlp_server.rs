@@ -105,8 +105,19 @@ impl LogsService for OtlpLogsServer {
                         continue;
                     };
 
+                    // Prefer the record's own time, then the collector's
+                    // observed-at time (set per-record by filelog/otlp
+                    // receivers — verified empirically), and only fall
+                    // back to Utc::now() if both are missing. Without this
+                    // fallback chain, a tailed-file burst all gets the
+                    // same Utc::now() because it arrives at our handler
+                    // within a single millisecond.
                     let timestamp = if log_record.time_unix_nano > 0 {
                         DateTime::<Utc>::from_timestamp_nanos(log_record.time_unix_nano as i64)
+                    } else if log_record.observed_time_unix_nano > 0 {
+                        DateTime::<Utc>::from_timestamp_nanos(
+                            log_record.observed_time_unix_nano as i64,
+                        )
                     } else {
                         Utc::now()
                     };

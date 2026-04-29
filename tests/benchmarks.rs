@@ -1,51 +1,51 @@
-/// Consolidated Log Analyzer Benchmark Suite
-///
-/// This is the CANONICAL way to benchmark the log analyzer.
-/// All benchmarks use the optimized LogMatcher with zero-copy optimizations.
-///
-/// ## Benchmark Modes:
-///
-/// 1. **Quick** - Fast smoke tests (100 logs per dataset)
-///    ```bash
-///    cargo test --release --test benchmarks quick -- --nocapture
-///    ```
-///
-/// 2. **Throughput** - Pure matching performance with cached templates (sequential)
-///    ```bash
-///    cargo test --release --test benchmarks throughput -- --nocapture
-///    ```
-///
-/// 3. **Ultra** - Parallel + batching + SIMD-style optimization (recommended for production)
-///    ```bash
-///    cargo test --release --test benchmarks ultra -- --nocapture
-///    ```
-///    Best for: Complex log formats with many templates (Linux, OpenStack)
-///    Less effective for: Simple/fast formats (Apache, Hdfs) due to thread overhead
-///
-/// 4. **Parallel** - Multi-threaded benchmark across all datasets
-///    ```bash
-///    cargo test --release --test benchmarks parallel -- --nocapture
-///    ```
-///
-/// 5. **Accuracy** - Template generation + accuracy measurement
-///    ```bash
-///    cargo test --release --test benchmarks accuracy -- --nocapture
-///    ```
-///
-/// 6. **Full** - Comprehensive benchmark (all datasets, all logs)
-///    ```bash
-///    cargo test --release --test benchmarks full -- --nocapture --ignored
-///    ```
-///
-/// ## Performance Tips:
-/// - ALWAYS use `--release` flag for accurate measurements
-/// - Debug mode is 20-50x slower than release mode
-/// - Use `--test-threads=1` to avoid contention (except for parallel tests)
-///
-/// ## Output:
-/// - Results are saved to `benchmark_results/` directory
-/// - JSON format for programmatic analysis
-/// - CSV format for spreadsheets
+//! Consolidated Log Analyzer Benchmark Suite
+//!
+//! This is the CANONICAL way to benchmark the log analyzer.
+//! All benchmarks use the optimized LogMatcher with zero-copy optimizations.
+//!
+//! ## Benchmark Modes:
+//!
+//! 1. **Quick** - Fast smoke tests (100 logs per dataset)
+//!    ```bash
+//!    cargo test --release --test benchmarks quick -- --nocapture
+//!    ```
+//!
+//! 2. **Throughput** - Pure matching performance with cached templates (sequential)
+//!    ```bash
+//!    cargo test --release --test benchmarks throughput -- --nocapture
+//!    ```
+//!
+//! 3. **Ultra** - Parallel + batching + SIMD-style optimization (recommended for production)
+//!    ```bash
+//!    cargo test --release --test benchmarks ultra -- --nocapture
+//!    ```
+//!    Best for: Complex log formats with many templates (Linux, OpenStack)
+//!    Less effective for: Simple/fast formats (Apache, Hdfs) due to thread overhead
+//!
+//! 4. **Parallel** - Multi-threaded benchmark across all datasets
+//!    ```bash
+//!    cargo test --release --test benchmarks parallel -- --nocapture
+//!    ```
+//!
+//! 5. **Accuracy** - Template generation + accuracy measurement
+//!    ```bash
+//!    cargo test --release --test benchmarks accuracy -- --nocapture
+//!    ```
+//!
+//! 6. **Full** - Comprehensive benchmark (all datasets, all logs)
+//!    ```bash
+//!    cargo test --release --test benchmarks full -- --nocapture --ignored
+//!    ```
+//!
+//! ## Performance Tips:
+//! - ALWAYS use `--release` flag for accurate measurements
+//! - Debug mode is 20-50x slower than release mode
+//! - Use `--test-threads=1` to avoid contention (except for parallel tests)
+//!
+//! ## Output:
+//! - Results are saved to `benchmark_results/` directory
+//! - JSON format for programmatic analysis
+//! - CSV format for spreadsheets
 
 use log_analyzer::benchmark_runner::run_benchmark;
 use log_analyzer::implementations::{LLMTemplateGenerator, RegexLogMatcher};
@@ -151,7 +151,7 @@ fn load_cached_matcher(dataset_name: &str) -> anyhow::Result<LogMatcher> {
     let cached: CachedTemplates = serde_json::from_str(&json_content)?;
 
     let config = MatcherConfig::batch_processing();
-    let mut matcher = LogMatcher::with_config(config);
+    let matcher = LogMatcher::with_config(config);
 
     for template in cached.templates {
         matcher.add_template(LogTemplate {

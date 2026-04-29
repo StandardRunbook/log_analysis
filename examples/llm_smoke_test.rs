@@ -1,11 +1,11 @@
-/// Smoke test for the configured LLM.
-///
-/// Loads .env (or environment) for LLM_PROVIDER / LLM_MODEL / LLM_API_KEY,
-/// sends a single log line through the LLM service, and prints the result.
-/// Exits non-zero if the API call fails — useful as a first validation
-/// before running larger tests.
-///
-/// Run with: cargo run --example llm_smoke_test
+//! Smoke test for the configured LLM.
+//!
+//! Loads .env (or environment) for LLM_PROVIDER / LLM_MODEL / LLM_API_KEY,
+//! sends a single log line through the LLM service, and prints the result.
+//! Exits non-zero if the API call fails — useful as a first validation
+//! before running larger tests.
+//!
+//! Run with: cargo run --example llm_smoke_test
 
 use log_analyzer::llm_config::MultiLLMConfig;
 use log_analyzer::llm_service::LLMServiceClient;

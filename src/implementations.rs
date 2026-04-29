@@ -110,14 +110,12 @@ impl OpenStackDatasetLoader {
 
             lines.next();
 
-            for line in lines {
-                if let Ok(line) = line {
-                    let parts: Vec<&str> = line.splitn(2, ',').collect();
-                    if parts.len() == 2 {
-                        let event_id = parts[0].to_string();
-                        let template = parts[1].trim_matches('"').to_string();
-                        templates.insert(event_id, template);
-                    }
+            for line in lines.map_while(Result::ok) {
+                let parts: Vec<&str> = line.splitn(2, ',').collect();
+                if parts.len() == 2 {
+                    let event_id = parts[0].to_string();
+                    let template = parts[1].trim_matches('"').to_string();
+                    templates.insert(event_id, template);
                 }
             }
         }

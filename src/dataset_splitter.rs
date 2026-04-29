@@ -154,7 +154,7 @@ fn stratified_split(
     for (i, entry) in ground_truth.iter().enumerate() {
         template_groups
             .entry(entry.event_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(i);
     }
 

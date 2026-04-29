@@ -10,7 +10,7 @@ use log_analyzer::log_matcher::{LogMatcher, LogTemplate};
 #[test]
 fn test_save_and_load_binary() {
     // Create matcher and add some templates
-    let mut matcher = LogMatcher::new();
+    let matcher = LogMatcher::new();
 
     matcher.add_template(LogTemplate {
         template_id: 100,
@@ -56,7 +56,7 @@ fn test_save_and_load_binary() {
 #[test]
 fn test_save_and_load_json() {
     // Create matcher and add templates
-    let mut matcher = LogMatcher::new();
+    let matcher = LogMatcher::new();
 
     matcher.add_template(LogTemplate {
         template_id: 200,
@@ -96,7 +96,7 @@ fn test_save_and_load_json() {
 
 #[test]
 fn test_preserves_all_template_data() {
-    let mut matcher = LogMatcher::new();
+    let matcher = LogMatcher::new();
 
     let original_template = LogTemplate {
         template_id: 300,
@@ -133,7 +133,7 @@ fn test_preserves_all_template_data() {
 #[test]
 fn test_aho_corasick_rebuilt_correctly() {
     // Create matcher with multiple templates
-    let mut matcher = LogMatcher::new();
+    let matcher = LogMatcher::new();
 
     for i in 0..10 {
         matcher.add_template(LogTemplate {
@@ -184,7 +184,7 @@ fn test_performance_binary_vs_json() {
     use std::time::Instant;
 
     // Create matcher with many templates
-    let mut matcher = LogMatcher::new();
+    let matcher = LogMatcher::new();
     for i in 0..100 {
         matcher.add_template(LogTemplate {
             template_id: 2000 + i,

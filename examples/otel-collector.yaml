@@ -16,10 +16,10 @@ processors:
   resource:
     attributes:
       - key: org_id
-        value: "e2e-grafana-demo"
+        value: "1"
         action: insert
       - key: log_stream_id
-        value: "varied-shapes"
+        value: "demo-stream"
         action: insert
       - key: log_stream_name
         value: "Varied shape test stream"
@@ -55,3 +55,16 @@ service:
   telemetry:
     logs:
       level: info
+    # Expose the collector's own metrics on :8888/metrics. Prometheus
+    # scrapes this. Gives us free observability of the ingest pipeline:
+    # otelcol_receiver_accepted_log_records, otelcol_exporter_sent_log_records,
+    # processor batch stats, etc. — the natural metric to correlate with the
+    # template-distribution shift in the log panels.
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: '0.0.0.0'
+                port: 8888

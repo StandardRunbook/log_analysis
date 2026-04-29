@@ -76,7 +76,7 @@ impl ProviderClient {
             && model
                 .chars()
                 .nth(1)
-                .map_or(false, |c| c.is_ascii_digit());
+                .is_some_and(|c| c.is_ascii_digit());
 
         let mut request_body = serde_json::json!({
             "model": model,
@@ -383,7 +383,7 @@ impl LLMServiceClient {
             // Normalize pattern for comparison (remove whitespace differences)
             let normalized = template.pattern.split_whitespace().collect::<Vec<_>>().join(" ");
             pattern_groups.entry(normalized.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((provider_name, template));
         }
 
@@ -391,11 +391,10 @@ impl LLMServiceClient {
         let mut best_group: Option<(&String, &Vec<(String, LogTemplate)>)> = None;
 
         for (pattern, group) in pattern_groups.iter() {
-            if group.len() >= required_agreement {
-                if best_group.is_none() || group.len() > best_group.unwrap().1.len() {
+            if group.len() >= required_agreement
+                && (best_group.is_none() || group.len() > best_group.unwrap().1.len()) {
                     best_group = Some((pattern, group));
                 }
-            }
         }
 
         match best_group {
@@ -415,7 +414,7 @@ impl LLMServiceClient {
                 tracing::warn!(
                     "No consensus reached. Required: {}, Got: {:?}",
                     required_agreement,
-                    pattern_groups.iter().map(|(_, g)| g.len()).collect::<Vec<_>>()
+                    pattern_groups.values().map(|g| g.len()).collect::<Vec<_>>()
                 );
 
                 // Fall back to most common pattern

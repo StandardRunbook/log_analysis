@@ -1,19 +1,19 @@
-/// Buffered ClickHouse writer that fully decouples the hot path from
-/// ClickHouse I/O.
-///
-/// Hot path: an HTTP handler calls `write(entry).await`, which is a single
-/// channel send — never blocks on a database round-trip, never holds a
-/// mutex during flush.
-///
-/// Writer task: a single dedicated task drains the channel into local
-/// batches and flushes to ClickHouse. Flushes happen on either size or
-/// time trigger. The hot path's latency is independent of ClickHouse's
-/// behavior — under load, the channel absorbs short bursts and applies
-/// backpressure on sustained overload.
-///
-/// Trade-off: on a hard process crash, entries that have been accepted
-/// by the channel but not yet flushed to ClickHouse are lost. The
-/// channel capacity caps the worst-case loss.
+//! Buffered ClickHouse writer that fully decouples the hot path from
+//! ClickHouse I/O.
+//!
+//! Hot path: an HTTP handler calls `write(entry).await`, which is a single
+//! channel send — never blocks on a database round-trip, never holds a
+//! mutex during flush.
+//!
+//! Writer task: a single dedicated task drains the channel into local
+//! batches and flushes to ClickHouse. Flushes happen on either size or
+//! time trigger. The hot path's latency is independent of ClickHouse's
+//! behavior — under load, the channel absorbs short bursts and applies
+//! backpressure on sustained overload.
+//!
+//! Trade-off: on a hard process crash, entries that have been accepted
+//! by the channel but not yet flushed to ClickHouse are lost. The
+//! channel capacity caps the worst-case loss.
 
 use crate::clickhouse_client::{ClickHouseClient, LogEntry};
 use std::sync::Arc;
