@@ -18,6 +18,9 @@ ignore:
   - "src/benchmark_runner.rs"
   - "src/traits.rs"
   - "src/implementations.rs"
+  # LogHub dataset loader — exercised only by the integration test that
+  # requires a real LLM API key. Hard to unit-test meaningfully.
+  - "src/loghub_loader.rs"
   - "examples/**"
   - "tests/**"
 
