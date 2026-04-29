@@ -17,6 +17,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # The lib does include_str!("../hover-schema/clickhouse_schema.sql") at
+    # build time, so the hover-schema submodule must be present. Skip the
+    # data/loghub-2.0 submodule (benchmark dataset, ~hundreds of MB) — it's
+    # not needed for unit tests.
+    - name: Init hover-schema submodule
+      run: git submodule update --init hover-schema
+
     - name: Setup Rust
       uses: actions-rs/toolchain@v1
       with:
@@ -57,6 +64,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    # The lib does include_str!("../hover-schema/clickhouse_schema.sql") at
+    # build time, so the hover-schema submodule must be present. Skip the
+    # data/loghub-2.0 submodule (benchmark dataset, ~hundreds of MB) — it's
+    # not needed for unit tests.
+    - name: Init hover-schema submodule
+      run: git submodule update --init hover-schema
 
     - name: Setup Rust
       uses: actions-rs/toolchain@v1
@@ -102,6 +116,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    # The lib does include_str!("../hover-schema/clickhouse_schema.sql") at
+    # build time, so the hover-schema submodule must be present. Skip the
+    # data/loghub-2.0 submodule (benchmark dataset, ~hundreds of MB) — it's
+    # not needed for unit tests.
+    - name: Init hover-schema submodule
+      run: git submodule update --init hover-schema
 
     - name: Setup Rust
       uses: actions-rs/toolchain@v1
