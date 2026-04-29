@@ -618,4 +618,137 @@ mod tests {
         let assigned = client.insert_template_with_autoid(template).await.unwrap();
         assert_eq!(assigned, crate::template_id::template_id_from_pattern(pattern));
     }
+
+    // -- clickhouse-rs query paths exercise the error branches. Building
+    //    a valid RowBinary response body for fetch_all/fetch_one is too
+    //    brittle to be worth replicating; we cover the dispatch + the
+    //    error path, and leave the success-payload decoding to integration
+    //    tests against a real ClickHouse instance.
+
+    #[tokio::test]
+    async fn test_query_logs_propagates_decode_error() {
+        // A 200 with an empty body fails to parse as RowBinary; that's a
+        // real failure mode if ClickHouse mis-frames a response and the
+        // function must surface the error rather than silently return zero
+        // rows.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(Vec::<u8>::new()))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let result = client
+            .query_logs(
+                "org-1",
+                "stream-1",
+                Utc::now() - chrono::Duration::hours(1),
+                Utc::now(),
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_query_logs_grouped_propagates_decode_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(Vec::<u8>::new()))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let result = client
+            .query_logs_grouped(
+                "org-1",
+                "stream-1",
+                Utc::now() - chrono::Duration::hours(1),
+                Utc::now(),
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_templates_propagates_decode_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(Vec::<u8>::new()))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let result = client.get_templates().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_templates_for_stream_propagates_decode_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(Vec::<u8>::new()))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let result = client
+            .get_templates_for_stream("org-1", "stream-1")
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_clear_templates_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        client.clear_templates().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_init_schema_executes_each_statement() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        // The schema file contains multiple statements; init_schema must
+        // not fail on any of them when ClickHouse 200s every request.
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        client.init_schema().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_query_logs_propagates_server_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .mount(&server)
+            .await;
+
+        let client = ClickHouseClient::new(&server.uri()).unwrap();
+        let result = client
+            .query_logs("o", "s", Utc::now() - chrono::Duration::hours(1), Utc::now())
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_log_group_serialize() {
+        let g = LogGroup {
+            template_id: "t-7".into(),
+            log_count: 42,
+            sample_messages: vec!["a".into(), "b".into()],
+            relative_change: 0.0,
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains("\"template_id\":\"t-7\""));
+        assert!(json.contains("\"log_count\":42"));
+        assert!(json.contains("\"relative_change\":0.0"));
+    }
 }
