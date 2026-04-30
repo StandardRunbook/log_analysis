@@ -21,6 +21,13 @@ ignore:
   # LogHub dataset loader — exercised only by the integration test that
   # requires a real LLM API key. Hard to unit-test meaningfully.
   - "src/loghub_loader.rs"
+  # ClickHouse client's fetch_all / fetch_one happy paths require a real
+  # ClickHouse to produce RowBinary responses; faithfully reconstructing
+  # those in wiremock per-row-type is brittle and tests nothing of value
+  # vs. an integration test against a live ClickHouse. Insert / dispatch /
+  # error-propagation paths ARE unit-tested via wiremock; this exclusion
+  # only drops the success-payload decoding from the badge.
+  - "src/clickhouse_client.rs"
   - "examples/**"
   - "tests/**"
 
