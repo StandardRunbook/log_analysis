@@ -353,6 +353,38 @@ mod tests {
     }
 
     #[test]
+    fn test_is_likely_parameter_empty_token_is_not() {
+        // Empty tokens are not parameters — they shouldn't pollute the
+        // dynamic-fields list. Verify via classify_tokens that an empty
+        // string in the input doesn't appear anywhere in the output.
+        let tokens = vec!["", "alpha"];
+        let (kw, params) = classify_tokens(&tokens);
+        assert!(!kw.iter().any(|k| k.is_empty()));
+        assert!(!params.iter().any(|p| p.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn test_generate_semantic_template_returns_tokenization_based_template() {
+        // The LLM-call path is currently stubbed — the function returns a
+        // tokenization-based SemanticTemplate without calling the LLM.
+        // Pin that contract: caller gets back keywords + parameter types
+        // derived from tokenize/classify_tokens.
+        let svc = LLMServiceClient::new("ollama".into(), "k".into(), "m".into());
+        let t = generate_semantic_template(
+            "Jun 14 sshd[19939]: authentication failure",
+            &svc,
+        )
+        .await
+        .unwrap();
+        assert_eq!(t.template_id, 0);
+        assert_eq!(t.description, "Generated from tokenization");
+        assert!(t.identifying_keywords.iter().any(|k| k.contains("sshd") || k.contains("authentication")));
+        assert!(t.pattern.is_none());
+    }
+
+    use crate::llm_service::LLMServiceClient;
+
+    #[test]
     fn test_semantic_match_round_trip() {
         let mut params = HashMap::new();
         params.insert("username".to_string(), "alice".to_string());

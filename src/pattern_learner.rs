@@ -325,6 +325,129 @@ mod tests {
         assert!(pattern.contains("system"));
     }
 
+    // The IPAddress and Uuid branches in detect_variable_type assume a
+    // tokenizer that doesn't split on `.` or `-` — but ours does, so
+    // those branches are unreachable from learn_from_samples in
+    // practice. Test them directly with crafted Token vectors. Same
+    // for to_regex_and_name and the UnixTimestamp digit-length branch.
+    fn tok(value: &str, ty: TokenType) -> Token {
+        Token { value: value.into(), token_type: ty }
+    }
+
+    #[test]
+    fn detect_variable_type_unix_timestamp_when_10_digit_present() {
+        let tokens = vec![
+            tok("1700000000", TokenType::Digit),
+            tok("1700000001", TokenType::Digit),
+        ];
+        let refs: Vec<&Token> = tokens.iter().collect();
+        let v = PatternLearner::detect_variable_type(&refs);
+        assert!(matches!(v, VariableType::UnixTimestamp));
+    }
+
+    #[test]
+    fn detect_variable_type_short_digit_token_is_number() {
+        let tokens = vec![tok("3", TokenType::Digit), tok("12", TokenType::Digit)];
+        let refs: Vec<&Token> = tokens.iter().collect();
+        assert!(matches!(
+            PatternLearner::detect_variable_type(&refs),
+            VariableType::Number
+        ));
+    }
+
+    #[test]
+    fn detect_variable_type_ipaddress_via_synthetic_token() {
+        // Single token that contains the dotted IP shape — only reachable
+        // by hand-crafting; the live tokenizer would split this on '.'.
+        let tokens = vec![tok("192.168.1.1", TokenType::Punctuation)];
+        let refs: Vec<&Token> = tokens.iter().collect();
+        assert!(matches!(
+            PatternLearner::detect_variable_type(&refs),
+            VariableType::IPAddress
+        ));
+    }
+
+    #[test]
+    fn detect_variable_type_uuid_via_synthetic_token() {
+        let tokens = vec![tok(
+            "550e8400-e29b-41d4-a716-446655440000",
+            TokenType::Punctuation,
+        )];
+        let refs: Vec<&Token> = tokens.iter().collect();
+        assert!(matches!(
+            PatternLearner::detect_variable_type(&refs),
+            VariableType::Uuid
+        ));
+    }
+
+    #[test]
+    fn detect_variable_type_string_fallback() {
+        // Non-digit, non-IP, non-hex, non-UUID — the catch-all String case.
+        let tokens = vec![tok("alphabetic_word", TokenType::Alpha)];
+        let refs: Vec<&Token> = tokens.iter().collect();
+        assert!(matches!(
+            PatternLearner::detect_variable_type(&refs),
+            VariableType::String
+        ));
+    }
+
+    #[test]
+    fn variable_type_to_regex_and_name_full_matrix() {
+        // Pin every variant's (regex, name) tuple. Guards against silent
+        // changes to the regex shapes that downstream code depends on.
+        let cases: &[(VariableType, &str, &str)] = &[
+            (VariableType::Number, r"(\d+)", "number"),
+            (
+                VariableType::IPAddress,
+                r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})",
+                "ip_address",
+            ),
+            (
+                VariableType::HexNumber,
+                r"(0x[0-9a-fA-F]+|[0-9a-fA-F]+)",
+                "hex_number",
+            ),
+            (
+                VariableType::Uuid,
+                r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+                "uuid",
+            ),
+            (VariableType::UnixTimestamp, r"(\d{10,})", "timestamp"),
+            (VariableType::String, r"(\S+)", "value"),
+        ];
+        for (variant, expected_re, expected_name) in cases {
+            let (re, name) = variant.to_regex_and_name();
+            assert_eq!(re, *expected_re);
+            assert_eq!(name, *expected_name);
+        }
+    }
+
+    #[test]
+    fn align_and_detect_variables_handles_uneven_sample_lengths() {
+        // Samples of different lengths: position past one sample's end
+        // should be skipped, not panic.
+        let samples = vec![
+            "user alice ok".to_string(),
+            "user bob".to_string(),
+            "user charlie ok extra".to_string(),
+        ];
+        // Should not panic; the fact that this returns at all exercises
+        // the empty-tokens-at-pos / shorter-sample branches.
+        let _ = PatternLearner::learn_from_samples(&samples);
+    }
+
+    #[test]
+    fn empty_tokenized_returns_empty_aligned_pattern() {
+        // When tokenize produces zero tokens for every sample (whitespace-
+        // only inputs), align_and_detect_variables returns Vec::new() via
+        // the early "all empty" path.
+        let samples = vec!["".to_string(), "".to_string()];
+        let (pattern, vars) = PatternLearner::learn_from_samples(&samples);
+        // Empty samples → empty pattern build; pattern equals empty.
+        assert_eq!(pattern, "");
+        assert!(vars.is_empty());
+    }
+
     #[test]
     fn test_detect_hex_number_via_alpha_only_tokens() {
         // tokenize() splits on letter/digit boundaries, so to exercise the

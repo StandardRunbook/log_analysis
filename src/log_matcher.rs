@@ -46,11 +46,6 @@ impl ScratchSpace {
     }
 }
 
-#[allow(dead_code)]
-static TOKENIZER: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
-    Regex::new(r#"(?:://)|(?:(?:[\s'`";=()\[\]{}?@&<>:\n\t\r,])|(?:[\.](\s+|$))|(?:\\["']))+"#)
-        .unwrap()
-});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogTemplate {
@@ -303,25 +298,6 @@ impl MatcherSnapshot {
     }
 }
 
-#[allow(dead_code)]
-fn tokenize(text: &str) -> Vec<&str> {
-    let mut tokens = Vec::new();
-    let mut last_end = 0;
-
-    for mat in TOKENIZER.find_iter(text) {
-        if mat.start() > last_end {
-            tokens.push(&text[last_end..mat.start()]);
-        }
-        last_end = mat.end();
-    }
-
-    if last_end < text.len() {
-        tokens.push(&text[last_end..]);
-    }
-
-    tokens
-}
-
 fn extract_fragments(pattern: &str, min_length: usize) -> Vec<String> {
     let mut fragments = Vec::new();
     let mut current_fragment = String::new();
@@ -528,15 +504,6 @@ impl LogMatcher {
         self.config.optimal_batch_size
     }
 
-    /// Generate next template ID. Currently unused — template IDs are
-    /// content-hashed (`template_id_from_pattern`) rather than
-    /// auto-incrementing, but the counter is kept for `set_next_template_id`
-    /// callers and for future migrations away from the hash scheme.
-    #[allow(dead_code)]
-    fn next_id(&self) -> u64 {
-        self.next_template_id.fetch_add(1, Ordering::SeqCst)
-    }
-
     /// Set the next template ID (used when loading from database to avoid collisions)
     pub fn set_next_template_id(&self, next_id: u64) {
         self.next_template_id.store(next_id, Ordering::SeqCst);
@@ -546,8 +513,7 @@ impl LogMatcher {
     pub fn add_template(&self, mut template: LogTemplate) {
         // IDs should be assigned at the synthesis site via
         // `template_id::template_id_from_pattern`, but fall back to computing
-        // it here for callers that haven't been updated. The auto-increment
-        // path (`next_id`) is retained only for legacy serialized state.
+        // it here for callers that haven't been updated.
         if template.template_id == 0 {
             template.template_id = crate::template_id::template_id_from_pattern(&template.pattern);
         }
@@ -1230,6 +1196,51 @@ mod tests {
         assert!(has_distinctive_markers("sshd(pam_unix)["));
         assert!(has_distinctive_markers("]: failure"));
         assert!(!has_distinctive_markers(" "));
+    }
+
+    #[test]
+    fn test_has_distinctive_markers_specific_log_keywords() {
+        // The specific-structure clause: pam_unix / logname / session-open
+        // / session-close get the distinctive flag even without brackets.
+        assert!(has_distinctive_markers("authentication via pam_unix module"));
+        assert!(has_distinctive_markers("logname= and ruser="));
+        assert!(has_distinctive_markers("session opened by user"));
+        assert!(has_distinctive_markers("session closed for user"));
+    }
+
+    #[test]
+    fn test_add_template_with_id_zero_assigns_content_hash() {
+        // template_id == 0 is the sentinel for "compute from pattern". The
+        // assigned id must equal template_id_from_pattern.
+        let m = LogMatcher::new();
+        let pattern = r"User (\w+) logged in";
+        m.add_template(LogTemplate {
+            template_id: 0, // sentinel
+            pattern: pattern.into(),
+            variables: vec!["user".into()],
+            example: "User alice logged in".into(),
+        });
+        let templates = m.get_all_templates();
+        assert_eq!(templates.len(), 1);
+        assert_eq!(
+            templates[0].template_id,
+            crate::template_id::template_id_from_pattern(pattern)
+        );
+    }
+
+    #[test]
+    fn test_matcher_snapshot_new_default() {
+        // The default-config constructor goes through MatcherSnapshot::new()
+        // (no explicit config). Add a template + match a log to exercise
+        // the full path.
+        let m = LogMatcher::default();
+        m.add_template(LogTemplate {
+            template_id: 0,
+            pattern: r"hello (\w+)".to_string(),
+            variables: vec!["who".into()],
+            example: "hello world".into(),
+        });
+        assert!(m.match_log("hello there").is_some());
     }
 
     #[test]
