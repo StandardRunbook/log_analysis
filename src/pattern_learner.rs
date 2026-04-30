@@ -336,10 +336,8 @@ mod tests {
 
     #[test]
     fn detect_variable_type_unix_timestamp_when_10_digit_present() {
-        let tokens = vec![
-            tok("1700000000", TokenType::Digit),
-            tok("1700000001", TokenType::Digit),
-        ];
+        let tokens = [tok("1700000000", TokenType::Digit),
+            tok("1700000001", TokenType::Digit)];
         let refs: Vec<&Token> = tokens.iter().collect();
         let v = PatternLearner::detect_variable_type(&refs);
         assert!(matches!(v, VariableType::UnixTimestamp));
@@ -347,7 +345,7 @@ mod tests {
 
     #[test]
     fn detect_variable_type_short_digit_token_is_number() {
-        let tokens = vec![tok("3", TokenType::Digit), tok("12", TokenType::Digit)];
+        let tokens = [tok("3", TokenType::Digit), tok("12", TokenType::Digit)];
         let refs: Vec<&Token> = tokens.iter().collect();
         assert!(matches!(
             PatternLearner::detect_variable_type(&refs),
@@ -359,7 +357,7 @@ mod tests {
     fn detect_variable_type_ipaddress_via_synthetic_token() {
         // Single token that contains the dotted IP shape — only reachable
         // by hand-crafting; the live tokenizer would split this on '.'.
-        let tokens = vec![tok("192.168.1.1", TokenType::Punctuation)];
+        let tokens = [tok("192.168.1.1", TokenType::Punctuation)];
         let refs: Vec<&Token> = tokens.iter().collect();
         assert!(matches!(
             PatternLearner::detect_variable_type(&refs),
@@ -369,7 +367,7 @@ mod tests {
 
     #[test]
     fn detect_variable_type_uuid_via_synthetic_token() {
-        let tokens = vec![tok(
+        let tokens = [tok(
             "550e8400-e29b-41d4-a716-446655440000",
             TokenType::Punctuation,
         )];
@@ -383,7 +381,7 @@ mod tests {
     #[test]
     fn detect_variable_type_string_fallback() {
         // Non-digit, non-IP, non-hex, non-UUID — the catch-all String case.
-        let tokens = vec![tok("alphabetic_word", TokenType::Alpha)];
+        let tokens = [tok("alphabetic_word", TokenType::Alpha)];
         let refs: Vec<&Token> = tokens.iter().collect();
         assert!(matches!(
             PatternLearner::detect_variable_type(&refs),

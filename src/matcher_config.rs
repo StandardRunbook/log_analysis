@@ -187,7 +187,7 @@ mod tests {
         let parsed: MatcherConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.min_fragment_length, 4);
         assert_eq!(parsed.optimal_batch_size, 7_777);
-        assert_eq!(parsed.cache_regex, false);
+        assert!(!parsed.cache_regex);
         assert!((parsed.fragment_match_threshold - 0.42).abs() < 1e-9);
     }
 }

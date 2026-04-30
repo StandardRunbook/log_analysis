@@ -365,7 +365,7 @@ pub struct LogGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{body_string, method, query_param};
+    use wiremock::matchers::{method, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn sample_log() -> LogEntry {
