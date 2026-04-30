@@ -46,7 +46,6 @@ impl ScratchSpace {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogTemplate {
     pub template_id: u64,
@@ -1078,10 +1077,7 @@ mod tests {
         let loaded = LogMatcher::load_from_file(path.to_str().unwrap()).unwrap();
         assert_eq!(loaded.get_all_templates().len(), 3);
         // Loaded matcher must still match the same logs.
-        assert_eq!(
-            loaded.match_log("cpu_usage: 55.5% - ok"),
-            Some(1)
-        );
+        assert_eq!(loaded.match_log("cpu_usage: 55.5% - ok"), Some(1));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1093,10 +1089,7 @@ mod tests {
         m.save_to_json(path.to_str().unwrap()).unwrap();
         let loaded = LogMatcher::load_from_json(path.to_str().unwrap()).unwrap();
         assert_eq!(loaded.get_all_templates().len(), 3);
-        assert_eq!(
-            loaded.match_log("memory_usage: 4.0GB - ok"),
-            Some(2)
-        );
+        assert_eq!(loaded.match_log("memory_usage: 4.0GB - ok"), Some(2));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1132,9 +1125,7 @@ mod tests {
         // result vector as serial. (Order is preserved per docs.)
         let m = LogMatcher::new();
         add_demo_templates(&m);
-        let logs: Vec<String> = (0..600)
-            .map(|i| format!("cpu_usage: {i}.0% - x"))
-            .collect();
+        let logs: Vec<String> = (0..600).map(|i| format!("cpu_usage: {i}.0% - x")).collect();
         let logs_ref: Vec<&str> = logs.iter().map(|s| s.as_str()).collect();
         let serial = m.match_batch(&logs_ref);
         let parallel = m.match_batch_parallel(&logs_ref);
@@ -1202,7 +1193,9 @@ mod tests {
     fn test_has_distinctive_markers_specific_log_keywords() {
         // The specific-structure clause: pam_unix / logname / session-open
         // / session-close get the distinctive flag even without brackets.
-        assert!(has_distinctive_markers("authentication via pam_unix module"));
+        assert!(has_distinctive_markers(
+            "authentication via pam_unix module"
+        ));
         assert!(has_distinctive_markers("logname= and ruser="));
         assert!(has_distinctive_markers("session opened by user"));
         assert!(has_distinctive_markers("session closed for user"));

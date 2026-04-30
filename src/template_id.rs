@@ -317,8 +317,10 @@ mod tests {
     fn nested_groups_collapse_to_one_slot() {
         // (a|b(c|d)) is one capture group containing another. Whatever's
         // inside is a "slot"; the inner depth doesn't add slots.
-        assert_eq!(canonicalize_pattern(r"prefix (foo|bar(baz|qux)) suffix"),
-                   "prefix {} suffix");
+        assert_eq!(
+            canonicalize_pattern(r"prefix (foo|bar(baz|qux)) suffix"),
+            "prefix {} suffix"
+        );
     }
 
     #[test]

@@ -352,18 +352,9 @@ mod tests {
 
     #[test]
     fn test_ephemeral_ipv6() {
-        assert_eq!(
-            classify_token("::1", None),
-            TokenClass::Ephemeral
-        );
-        assert_eq!(
-            classify_token("fe80::1234", None),
-            TokenClass::Ephemeral
-        );
-        assert_eq!(
-            classify_token("2001:db8::1", None),
-            TokenClass::Ephemeral
-        );
+        assert_eq!(classify_token("::1", None), TokenClass::Ephemeral);
+        assert_eq!(classify_token("fe80::1234", None), TokenClass::Ephemeral);
+        assert_eq!(classify_token("2001:db8::1", None), TokenClass::Ephemeral);
     }
 
     #[test]
@@ -436,8 +427,10 @@ mod tests {
             if code.chars().all(|c| c.is_numeric()) {
                 assert_eq!(cls, TokenClass::Ephemeral, "{code}");
             } else {
-                assert!(matches!(cls, TokenClass::Parameter(ParameterType::Action)),
-                    "{code} → {cls:?}");
+                assert!(
+                    matches!(cls, TokenClass::Parameter(ParameterType::Action)),
+                    "{code} → {cls:?}"
+                );
             }
         }
     }
@@ -445,10 +438,13 @@ mod tests {
     #[test]
     fn test_classify_parameter_user_keywords() {
         for u in ["root", "admin", "guest", "rooted", "adminstrator"] {
-            assert!(matches!(
-                classify_token(u, None),
-                TokenClass::Parameter(ParameterType::User)
-            ), "{u}");
+            assert!(
+                matches!(
+                    classify_token(u, None),
+                    TokenClass::Parameter(ParameterType::User)
+                ),
+                "{u}"
+            );
         }
     }
 

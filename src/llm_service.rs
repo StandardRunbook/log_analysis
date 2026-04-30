@@ -770,7 +770,10 @@ mod tests {
         let svc = LLMServiceClient::new("ollama".into(), "key".into(), "llama3".into());
         assert_eq!(svc.config.providers.len(), 1);
         assert_eq!(svc.config.providers[0].provider, "ollama");
-        assert_eq!(svc.config.consensus_strategy, ConsensusStrategy::FirstSuccess);
+        assert_eq!(
+            svc.config.consensus_strategy,
+            ConsensusStrategy::FirstSuccess
+        );
     }
 
     #[test]
@@ -809,7 +812,9 @@ mod tests {
         // No object delimiters at all → falls back to whole response,
         // which fails json parse → error.
         let err = ProviderClient::parse_llm_response("log", "not json").unwrap_err();
-        assert!(err.to_string().contains("Failed to parse LLM JSON response"));
+        assert!(err
+            .to_string()
+            .contains("Failed to parse LLM JSON response"));
     }
 
     #[test]
@@ -822,10 +827,8 @@ mod tests {
 
     #[test]
     fn test_parse_classification_response() {
-        let r = ProviderClient::parse_classification_response(
-            r#"prefix ["a","b","c"] suffix"#,
-        )
-        .unwrap();
+        let r = ProviderClient::parse_classification_response(r#"prefix ["a","b","c"] suffix"#)
+            .unwrap();
         assert_eq!(r, vec!["a".to_string(), "b".into(), "c".into()]);
     }
 
@@ -976,8 +979,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let svc = LLMServiceClient::new_with_config(first_success(anthropic_provider(&server.uri())))
-            .unwrap();
+        let svc =
+            LLMServiceClient::new_with_config(first_success(anthropic_provider(&server.uri())))
+                .unwrap();
         let t = svc.generate_template("anything").await.unwrap();
         assert_eq!(t.pattern, "ok");
     }
@@ -1065,7 +1069,8 @@ mod tests {
 
         let svc = LLMServiceClient::new_with_config(first_success(openai_provider(&server.uri())))
             .unwrap();
-        let result = svc.classify_fragments(&["1".into(), "10.0.0.1".into()], "1 10.0.0.1")
+        let result = svc
+            .classify_fragments(&["1".into(), "10.0.0.1".into()], "1 10.0.0.1")
             .await
             .unwrap();
         assert_eq!(result, vec!["number".to_string(), "ip_address".into()]);
@@ -1109,7 +1114,9 @@ mod tests {
         )))
         .unwrap();
         let err = svc.call_openai_simple("p").await.unwrap_err();
-        assert!(err.to_string().contains("call_simple only supported for OpenAI"));
+        assert!(err
+            .to_string()
+            .contains("call_simple only supported for OpenAI"));
     }
 
     // ---------- consensus paths ----------

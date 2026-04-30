@@ -370,15 +370,15 @@ mod tests {
         // Pin that contract: caller gets back keywords + parameter types
         // derived from tokenize/classify_tokens.
         let svc = LLMServiceClient::new("ollama".into(), "k".into(), "m".into());
-        let t = generate_semantic_template(
-            "Jun 14 sshd[19939]: authentication failure",
-            &svc,
-        )
-        .await
-        .unwrap();
+        let t = generate_semantic_template("Jun 14 sshd[19939]: authentication failure", &svc)
+            .await
+            .unwrap();
         assert_eq!(t.template_id, 0);
         assert_eq!(t.description, "Generated from tokenization");
-        assert!(t.identifying_keywords.iter().any(|k| k.contains("sshd") || k.contains("authentication")));
+        assert!(t
+            .identifying_keywords
+            .iter()
+            .any(|k| k.contains("sshd") || k.contains("authentication")));
         assert!(t.pattern.is_none());
     }
 
@@ -397,7 +397,10 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         let back: SemanticMatch = serde_json::from_str(&json).unwrap();
         assert_eq!(back.template_id, 7);
-        assert_eq!(back.parameters.get("username").map(|s| s.as_str()), Some("alice"));
+        assert_eq!(
+            back.parameters.get("username").map(|s| s.as_str()),
+            Some("alice")
+        );
         assert!((back.confidence - 0.95).abs() < 1e-9);
     }
 }

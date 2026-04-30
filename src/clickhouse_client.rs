@@ -527,7 +527,10 @@ mod tests {
     async fn test_insert_template_assigns_content_hash_when_zero() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(query_param("query", "INSERT INTO templates FORMAT JSONEachRow"))
+            .and(query_param(
+                "query",
+                "INSERT INTO templates FORMAT JSONEachRow",
+            ))
             .respond_with(ResponseTemplate::new(200))
             .expect(1)
             .mount(&server)
@@ -546,7 +549,10 @@ mod tests {
         };
         let assigned = client.insert_template(template).await.unwrap();
         // Same pattern → same hash; assert determinism.
-        assert_eq!(assigned, crate::template_id::template_id_from_pattern(pattern));
+        assert_eq!(
+            assigned,
+            crate::template_id::template_id_from_pattern(pattern)
+        );
         assert_ne!(assigned, 0);
     }
 
@@ -616,7 +622,10 @@ mod tests {
             created_at: Utc::now(),
         };
         let assigned = client.insert_template_with_autoid(template).await.unwrap();
-        assert_eq!(assigned, crate::template_id::template_id_from_pattern(pattern));
+        assert_eq!(
+            assigned,
+            crate::template_id::template_id_from_pattern(pattern)
+        );
     }
 
     // -- clickhouse-rs query paths exercise the error branches. Building
@@ -691,9 +700,7 @@ mod tests {
             .await;
 
         let client = ClickHouseClient::new(&server.uri()).unwrap();
-        let result = client
-            .get_templates_for_stream("org-1", "stream-1")
-            .await;
+        let result = client.get_templates_for_stream("org-1", "stream-1").await;
         assert!(result.is_err());
     }
 
@@ -733,7 +740,12 @@ mod tests {
 
         let client = ClickHouseClient::new(&server.uri()).unwrap();
         let result = client
-            .query_logs("o", "s", Utc::now() - chrono::Duration::hours(1), Utc::now())
+            .query_logs(
+                "o",
+                "s",
+                Utc::now() - chrono::Duration::hours(1),
+                Utc::now(),
+            )
             .await;
         assert!(result.is_err());
     }

@@ -331,13 +331,18 @@ mod tests {
     // practice. Test them directly with crafted Token vectors. Same
     // for to_regex_and_name and the UnixTimestamp digit-length branch.
     fn tok(value: &str, ty: TokenType) -> Token {
-        Token { value: value.into(), token_type: ty }
+        Token {
+            value: value.into(),
+            token_type: ty,
+        }
     }
 
     #[test]
     fn detect_variable_type_unix_timestamp_when_10_digit_present() {
-        let tokens = [tok("1700000000", TokenType::Digit),
-            tok("1700000001", TokenType::Digit)];
+        let tokens = [
+            tok("1700000000", TokenType::Digit),
+            tok("1700000001", TokenType::Digit),
+        ];
         let refs: Vec<&Token> = tokens.iter().collect();
         let v = PatternLearner::detect_variable_type(&refs);
         assert!(matches!(v, VariableType::UnixTimestamp));
@@ -477,6 +482,10 @@ mod tests {
         // At least two distinct number variables — names must differ.
         assert!(number_count >= 2, "got variables: {variables:?}");
         let unique_names: std::collections::HashSet<_> = variables.iter().collect();
-        assert_eq!(unique_names.len(), variables.len(), "duplicate variable names: {variables:?}");
+        assert_eq!(
+            unique_names.len(),
+            variables.len(),
+            "duplicate variable names: {variables:?}"
+        );
     }
 }

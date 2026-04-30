@@ -131,8 +131,16 @@ mod tests {
 
     #[test]
     fn test_with_regex_caching() {
-        assert!(!MatcherConfig::default().with_regex_caching(false).cache_regex);
-        assert!(MatcherConfig::default().with_regex_caching(true).cache_regex);
+        assert!(
+            !MatcherConfig::default()
+                .with_regex_caching(false)
+                .cache_regex
+        );
+        assert!(
+            MatcherConfig::default()
+                .with_regex_caching(true)
+                .cache_regex
+        );
     }
 
     #[test]
@@ -140,7 +148,9 @@ mod tests {
         // 0 isn't a valid min length — the matcher would degenerate.
         // Builder clamps it up to 1 silently.
         assert_eq!(
-            MatcherConfig::default().with_min_fragment_length(0).min_fragment_length,
+            MatcherConfig::default()
+                .with_min_fragment_length(0)
+                .min_fragment_length,
             1
         );
     }
@@ -148,15 +158,21 @@ mod tests {
     #[test]
     fn test_with_fragment_threshold_clamps() {
         assert_eq!(
-            MatcherConfig::default().with_fragment_threshold(-0.5).fragment_match_threshold,
+            MatcherConfig::default()
+                .with_fragment_threshold(-0.5)
+                .fragment_match_threshold,
             0.0
         );
         assert_eq!(
-            MatcherConfig::default().with_fragment_threshold(1.5).fragment_match_threshold,
+            MatcherConfig::default()
+                .with_fragment_threshold(1.5)
+                .fragment_match_threshold,
             1.0
         );
         assert_eq!(
-            MatcherConfig::default().with_fragment_threshold(0.7).fragment_match_threshold,
+            MatcherConfig::default()
+                .with_fragment_threshold(0.7)
+                .fragment_match_threshold,
             0.7
         );
     }
@@ -165,7 +181,11 @@ mod tests {
     fn test_to_ac_match_kind_round_trip() {
         // The exhaustive mapping from our enum to aho_corasick's.
         // Equality on aho_corasick::MatchKind is by variant name.
-        for variant in [MatchKind::LeftmostLongest, MatchKind::LeftmostFirst, MatchKind::Standard] {
+        for variant in [
+            MatchKind::LeftmostLongest,
+            MatchKind::LeftmostFirst,
+            MatchKind::Standard,
+        ] {
             let cfg = MatcherConfig::default().with_match_kind(variant);
             // smoke: just ensure each variant is reachable / does not panic
             let _ = cfg.to_ac_match_kind();

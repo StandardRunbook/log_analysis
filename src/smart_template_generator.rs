@@ -212,7 +212,10 @@ mod tests {
         assert_eq!(template.template_id, 100);
         assert_eq!(template.example, log);
         // Generic path captures decimal/integer variables.
-        assert!(template.variables.iter().any(|v| v == "number" || v == "decimal_value"));
+        assert!(template
+            .variables
+            .iter()
+            .any(|v| v == "number" || v == "decimal_value"));
     }
 
     #[test]
@@ -240,7 +243,9 @@ mod tests {
         let log = "Jul 27 14:41:58 combo nginx: client 10.0.0.5 connected";
         let template = SmartTemplateGenerator::generate_template(log, 1);
         // IP must appear as a capture group, not the literal address.
-        assert!(template.pattern.contains(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"));
+        assert!(template
+            .pattern
+            .contains(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"));
         assert!(!template.pattern.contains("10.0.0.5"));
     }
 
@@ -248,9 +253,9 @@ mod tests {
     fn test_message_pattern_captures_uuid() {
         let log = "Jul 27 14:41:58 combo apache: id 550e8400-e29b-41d4-a716-446655440000 ok";
         let template = SmartTemplateGenerator::generate_template(log, 1);
-        assert!(template
-            .pattern
-            .contains("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"));
+        assert!(template.pattern.contains(
+            "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+        ));
     }
 
     #[test]
@@ -276,9 +281,7 @@ mod tests {
         // message has exactly 3 dots, "decimal_value" iff there's a
         // \d+\.\d+ match, and "number" iff there's an integer. Falls
         // back to ["message"] when none match.
-        let g = |line: &str, id: u64| {
-            SmartTemplateGenerator::generate_template(line, id).variables
-        };
+        let g = |line: &str, id: u64| SmartTemplateGenerator::generate_template(line, id).variables;
         // Plain prose (no numbers) → ["message"]
         assert_eq!(g("hello world", 1), vec!["message".to_string()]);
         // Integer only

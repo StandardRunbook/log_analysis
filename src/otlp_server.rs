@@ -254,11 +254,7 @@ mod tests {
     /// Returns the server, the matcher (so the test can pre-load
     /// templates), and the unmatched-queue receiver (so the test can
     /// observe what was queued for the LLM consumer).
-    async fn make_server() -> (
-        OtlpLogsServer,
-        Arc<LogMatcher>,
-        mpsc::Receiver<LogEntry>,
-    ) {
+    async fn make_server() -> (OtlpLogsServer, Arc<LogMatcher>, mpsc::Receiver<LogEntry>) {
         // wiremock as a stand-in for ClickHouse — accepts any insert.
         let mock_ch = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -266,8 +262,7 @@ mod tests {
             .mount(&mock_ch)
             .await;
 
-        let ch =
-            Arc::new(crate::clickhouse_client::ClickHouseClient::new(&mock_ch.uri()).unwrap());
+        let ch = Arc::new(crate::clickhouse_client::ClickHouseClient::new(&mock_ch.uri()).unwrap());
         let writer = Arc::new(crate::buffered_writer::BufferedClickHouseWriter::new(
             ch,
             10,
@@ -277,7 +272,11 @@ mod tests {
 
         let matcher = Arc::new(LogMatcher::new());
         let (tx, rx) = mpsc::channel::<LogEntry>(64);
-        (OtlpLogsServer::new(matcher.clone(), writer, tx), matcher, rx)
+        (
+            OtlpLogsServer::new(matcher.clone(), writer, tx),
+            matcher,
+            rx,
+        )
     }
 
     fn record_with_body(body: &str, time_ns: u64, observed_ns: u64) -> LogRecord {
@@ -403,7 +402,10 @@ mod tests {
         server.export(Request::new(req)).await.unwrap();
         let a = unmatched_rx.recv().await.unwrap();
         // A's timestamp should match the observed_time we set.
-        assert_eq!(a.timestamp.timestamp_nanos_opt(), Some(1_700_000_000_000_000_000));
+        assert_eq!(
+            a.timestamp.timestamp_nanos_opt(),
+            Some(1_700_000_000_000_000_000)
+        );
         let b = unmatched_rx.recv().await.unwrap();
         // B falls through to Utc::now() — we can't assert exact value
         // but it must be recent (within the last 5 seconds).
@@ -432,7 +434,9 @@ mod tests {
             // Build a trivially-constructed writer pointed at a non-listening
             // URL. We never call into it in this test.
             Arc::new(crate::buffered_writer::BufferedClickHouseWriter::new(
-                Arc::new(crate::clickhouse_client::ClickHouseClient::new("http://127.0.0.1:1").unwrap()),
+                Arc::new(
+                    crate::clickhouse_client::ClickHouseClient::new("http://127.0.0.1:1").unwrap(),
+                ),
                 1,
                 std::time::Duration::from_secs(1),
             )),

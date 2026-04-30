@@ -365,11 +365,20 @@ mod tests {
         let (pattern, variables) = FragmentClassifier::build_pattern(&fragments, &classifications);
         assert!(pattern.contains("frag2")); // Service is static literal
         for expected in [
-            "timestamp", "hostname", "pid", "number",
-            "ip_address", "path", "hex", "uuid", "url",
+            "timestamp",
+            "hostname",
+            "pid",
+            "number",
+            "ip_address",
+            "path",
+            "hex",
+            "uuid",
+            "url",
         ] {
             assert!(
-                variables.iter().any(|v| v == expected || v.starts_with(&format!("{expected}_"))),
+                variables
+                    .iter()
+                    .any(|v| v == expected || v.starts_with(&format!("{expected}_"))),
                 "expected a variable named {expected:?} in {variables:?}"
             );
         }
@@ -386,10 +395,8 @@ mod tests {
             ("2024-01-15", "timestamp"), // mixed → catch-all
         ];
         for (frag, expected_var) in cases {
-            let (_, vars) = FragmentClassifier::build_pattern(
-                &[frag.to_string()],
-                &[FragmentType::Timestamp],
-            );
+            let (_, vars) =
+                FragmentClassifier::build_pattern(&[frag.to_string()], &[FragmentType::Timestamp]);
             assert_eq!(vars, vec![expected_var.to_string()], "for {frag:?}");
         }
     }

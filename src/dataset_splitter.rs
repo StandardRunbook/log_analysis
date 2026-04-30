@@ -415,13 +415,29 @@ mod tests {
         let split = DatasetSplit {
             train_logs: vec!["a".into(), "b".into()],
             train_ground_truth: vec![
-                GroundTruthEntry { log_line: "a".into(), event_id: "E1".into(), expected_template: None },
-                GroundTruthEntry { log_line: "b".into(), event_id: "E2".into(), expected_template: None },
+                GroundTruthEntry {
+                    log_line: "a".into(),
+                    event_id: "E1".into(),
+                    expected_template: None,
+                },
+                GroundTruthEntry {
+                    log_line: "b".into(),
+                    event_id: "E2".into(),
+                    expected_template: None,
+                },
             ],
             test_logs: vec!["c".into(), "d".into()],
             test_ground_truth: vec![
-                GroundTruthEntry { log_line: "c".into(), event_id: "E2".into(), expected_template: None },
-                GroundTruthEntry { log_line: "d".into(), event_id: "E3".into(), expected_template: None },
+                GroundTruthEntry {
+                    log_line: "c".into(),
+                    event_id: "E2".into(),
+                    expected_template: None,
+                },
+                GroundTruthEntry {
+                    log_line: "d".into(),
+                    event_id: "E3".into(),
+                    expected_template: None,
+                },
             ],
         };
         let stats = split.stats();
