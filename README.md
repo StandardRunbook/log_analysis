@@ -6,11 +6,15 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/StandardRunbook/log_analysis?display_name=tag&sort=semver&include_prereleases)](https://github.com/StandardRunbook/log_analysis/releases)
 
-A multi-tenant log ingest service. Each record is classified into a
-template (a regex pattern with named variables) and persisted to
-ClickHouse alongside the template's content-hashed id. The resulting
-template histograms support distribution-shift analytics — Jensen-Shannon
-divergence between any two time windows — which the
+A multi-tenant log ingest service. **5.35M logs/sec hot-path throughput;
+p99 latency 9.3 ms; 100% match rate.** Single MacBook, batch 1000,
+concurrency 32. Full numbers in [Performance](#performance).
+
+Each record is classified into a template (a regex pattern with named
+variables) and persisted to ClickHouse alongside the template's
+content-hashed id. The resulting template histograms support
+distribution-shift analytics — Jensen-Shannon divergence between any
+two time windows — which the
 [grafana-hover-plugin](https://github.com/StandardRunbook/grafana-hover-plugin)
 uses to answer "which log shapes correlate with the moment I'm hovering on?"
 
