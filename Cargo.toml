@@ -78,7 +78,7 @@ rand = "0.8"
 # CSV parsing for LogHub datasets
 csv = "1.3"
 
-once_cell = "1.19"
+once_cell = "1.21"
 
 # OpenTelemetry for log ingestion
 opentelemetry = "0.22"
