@@ -35,7 +35,7 @@ tonic = "0.12"
 prost = "0.13"
 
 # Parallel processing
-rayon = "1.8"
+rayon = "1.12"
 
 # Structural sharing / persistent data structures
 arc-swap = "1.7"
