@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     # The lib does include_str!("../hover-schema/clickhouse_schema.sql") at
     # build time, so the hover-schema submodule must be present. Skip the
@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     # The lib does include_str!("../hover-schema/clickhouse_schema.sql") at
     # build time, so the hover-schema submodule must be present. Skip the
@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     # The lib does include_str!("../hover-schema/clickhouse_schema.sql") at
     # build time, so the hover-schema submodule must be present. Skip the
